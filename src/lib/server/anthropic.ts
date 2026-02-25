@@ -12,6 +12,19 @@ function getClient() {
 const INITIAL_MODEL = 'claude-opus-4-6';
 const EDIT_MODEL = 'claude-sonnet-4-6';
 
+// Prices in USD per token (as of early 2026)
+const MODEL_PRICES: Record<string, { input: number; output: number }> = {
+	'claude-opus-4-6':          { input: 15 / 1_000_000,  output: 75 / 1_000_000 },
+	'claude-sonnet-4-6':        { input: 3  / 1_000_000,  output: 15 / 1_000_000 },
+	'claude-haiku-4-5-20251001': { input: 0.8 / 1_000_000, output: 4  / 1_000_000 },
+	'claude-haiku-4-5':          { input: 0.8 / 1_000_000, output: 4  / 1_000_000 }
+};
+
+export function calcCost(model: string, inputTokens: number, outputTokens: number): number {
+	const prices = MODEL_PRICES[model] ?? MODEL_PRICES['claude-sonnet-4-6'];
+	return prices.input * inputTokens + prices.output * outputTokens;
+}
+
 function schemaToDescription(tables: TableSchema[]): string {
 	return tables
 		.map((t) => {
@@ -85,7 +98,8 @@ export async function* generateApp(
 	tables: TableSchema[],
 	apiBase: string,
 	appId: string,
-	uxSummaries: string[]
+	uxSummaries: string[],
+	onCost?: (cost: number) => void
 ): AsyncGenerator<string> {
 	const client = getClient();
 	const system = buildSystemPrompt(requirements, tables, apiBase, appId, uxSummaries);
@@ -114,6 +128,7 @@ export async function* generateApp(
 	}
 
 	const final = await stream.finalMessage();
+	if (onCost) onCost(calcCost(INITIAL_MODEL, final.usage.input_tokens, final.usage.output_tokens));
 	if (final.stop_reason === 'max_tokens') {
 		yield '\n<!-- [TRUNCATED: output hit max_tokens limit — try rebuilding] -->';
 	}
@@ -138,7 +153,8 @@ export async function* continueApp(
 	tables: TableSchema[],
 	apiBase: string,
 	appId: string,
-	uxSummaries: string[]
+	uxSummaries: string[],
+	onCost?: (cost: number) => void
 ): AsyncGenerator<string> {
 	const client = getClient();
 	const system = buildSystemPrompt(requirements, tables, apiBase, appId, uxSummaries);
@@ -168,6 +184,7 @@ export async function* continueApp(
 	}
 
 	const final = await stream.finalMessage();
+	if (onCost) onCost(calcCost(INITIAL_MODEL, final.usage.input_tokens, final.usage.output_tokens));
 	if (final.stop_reason === 'max_tokens') {
 		yield '\n<!-- [TRUNCATED: output hit max_tokens limit — try rebuilding] -->';
 	}
@@ -202,7 +219,8 @@ export async function* generateEditDiff(
 	tables: TableSchema[],
 	apiBase: string,
 	appId: string,
-	uxSummaries: string[]
+	uxSummaries: string[],
+	onCost?: (cost: number) => void
 ): AsyncGenerator<string> {
 	const client = getClient();
 	const system = buildSystemPrompt(requirements, tables, apiBase, appId, uxSummaries) + DIFF_SYSTEM_SUFFIX;
@@ -227,6 +245,9 @@ export async function* generateEditDiff(
 			yield event.delta.text;
 		}
 	}
+
+	const finalDiff = await stream.finalMessage();
+	if (onCost) onCost(calcCost(EDIT_MODEL, finalDiff.usage.input_tokens, finalDiff.usage.output_tokens));
 }
 
 // ─── Edit request (Sonnet 4.6) ────────────────────────────────────────────────
@@ -238,7 +259,8 @@ export async function* editApp(
 	tables: TableSchema[],
 	apiBase: string,
 	appId: string,
-	uxSummaries: string[]
+	uxSummaries: string[],
+	onCost?: (cost: number) => void
 ): AsyncGenerator<string> {
 	const client = getClient();
 	const system = buildSystemPrompt(requirements, tables, apiBase, appId, uxSummaries);
@@ -265,6 +287,7 @@ export async function* editApp(
 	}
 
 	const final = await stream.finalMessage();
+	if (onCost) onCost(calcCost(EDIT_MODEL, final.usage.input_tokens, final.usage.output_tokens));
 	if (final.stop_reason === 'max_tokens') {
 		yield '\n<!-- [TRUNCATED: output hit max_tokens limit — try editing again] -->';
 	}
@@ -273,10 +296,14 @@ export async function* editApp(
 // ─── Intent classification (Haiku 4.5, fast) ─────────────────────────────────
 // Returns 'update' for code changes, 'chat' for questions/conversation.
 
-export async function classifyIntent(message: string): Promise<'update' | 'chat'> {
+export async function classifyIntent(
+	message: string,
+	onCost?: (cost: number) => void
+): Promise<'update' | 'chat'> {
 	const client = getClient();
+	const model = 'claude-haiku-4-5-20251001';
 	const response = await client.messages.create({
-		model: 'claude-haiku-4-5-20251001',
+		model,
 		max_tokens: 10,
 		messages: [
 			{
@@ -285,6 +312,7 @@ export async function classifyIntent(message: string): Promise<'update' | 'chat'
 			}
 		]
 	});
+	if (onCost) onCost(calcCost(model, response.usage.input_tokens, response.usage.output_tokens));
 	const text = response.content.find((b) => b.type === 'text');
 	const word = text?.type === 'text' ? text.text.trim().toLowerCase() : 'update';
 	return word === 'chat' ? 'chat' : 'update';
@@ -295,7 +323,8 @@ export async function classifyIntent(message: string): Promise<'update' | 'chat'
 export async function* chatConversation(
 	message: string,
 	appName: string,
-	requirements: string
+	requirements: string,
+	onCost?: (cost: number) => void
 ): AsyncGenerator<string> {
 	const client = getClient();
 
@@ -316,14 +345,21 @@ export async function* chatConversation(
 			yield event.delta.text;
 		}
 	}
+
+	const finalChat = await stream.finalMessage();
+	if (onCost) onCost(calcCost(EDIT_MODEL, finalChat.usage.input_tokens, finalChat.usage.output_tokens));
 }
 
 // ─── Summarise a user edit request (Haiku 4.5, fast) ─────────────────────────
 
-export async function summariseRequest(editRequest: string): Promise<string> {
+export async function summariseRequest(
+	editRequest: string,
+	onCost?: (cost: number) => void
+): Promise<string> {
 	const client = getClient();
+	const model = 'claude-haiku-4-5-20251001';
 	const response = await client.messages.create({
-		model: 'claude-haiku-4-5',
+		model,
 		max_tokens: 100,
 		messages: [
 			{
@@ -332,6 +368,7 @@ export async function summariseRequest(editRequest: string): Promise<string> {
 			}
 		]
 	});
+	if (onCost) onCost(calcCost(model, response.usage.input_tokens, response.usage.output_tokens));
 	const block = response.content.find((b) => b.type === 'text');
 	return block?.type === 'text' ? block.text.trim() : editRequest.slice(0, 100);
 }

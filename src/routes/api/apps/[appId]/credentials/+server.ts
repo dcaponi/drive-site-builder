@@ -12,10 +12,12 @@ export const PUT: RequestHandler = async ({ params, locals, request, url }) => {
 	if (!app) throw error(404, 'App not found');
 
 	const body = await request.json();
-	const { owners, password, allowed_domains } = body as {
+	const { owners, password, allowed_domains, spend_limit_usd, is_cutoff } = body as {
 		owners: string[];
 		password: string;
 		allowed_domains?: string[];
+		spend_limit_usd?: number;
+		is_cutoff?: boolean;
 	};
 
 	if (!Array.isArray(owners) || !password) {
@@ -25,7 +27,9 @@ export const PUT: RequestHandler = async ({ params, locals, request, url }) => {
 	await updateAppInConfig(auth, app.id, {
 		app_owners: owners.map((e) => e.trim()).filter(Boolean),
 		app_password: password,
-		allowed_domains: (allowed_domains ?? []).map((d) => d.trim()).filter(Boolean)
+		allowed_domains: (allowed_domains ?? []).map((d) => d.trim()).filter(Boolean),
+		...(spend_limit_usd !== undefined && { spend_limit_usd }),
+		...(is_cutoff !== undefined && { is_cutoff })
 	});
 
 	return json({ ok: true });

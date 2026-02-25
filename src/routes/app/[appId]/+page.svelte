@@ -21,6 +21,13 @@
 	let magicLinkCopied = $state(false);
 	let credentialsActive = $state(!!(data.app.app_owners?.length));
 
+	// Spend control state
+	let spendLimit = $state(String(data.app.spend_limit_usd ?? 0));
+	let isCutoff = $state(data.app.is_cutoff ?? false);
+	let spendSaving = $state(false);
+	let spendError = $state('');
+	let spendSuccess = $state('');
+
 	$effect(() => {
 		if (buildLog && logDiv) {
 			logDiv.scrollTop = logDiv.scrollHeight;
@@ -126,6 +133,28 @@
 		await navigator.clipboard.writeText(magicLink);
 		magicLinkCopied = true;
 		setTimeout(() => (magicLinkCopied = false), 2000);
+	}
+
+	async function saveSpend() {
+		spendSaving = true;
+		spendError = '';
+		spendSuccess = '';
+		try {
+			const res = await fetch(`/api/apps/${data.app.id}/spend`, {
+				method: 'PATCH',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					spend_limit_usd: parseFloat(spendLimit) || 0,
+					is_cutoff: isCutoff
+				})
+			});
+			if (!res.ok) throw new Error(await res.text());
+			spendSuccess = 'Spend settings saved.';
+		} catch (err) {
+			spendError = err instanceof Error ? err.message : 'Failed to save';
+		} finally {
+			spendSaving = false;
+		}
 	}
 </script>
 
@@ -251,6 +280,43 @@
 			{/if}
 		</div>
 	{/if}
+</section>
+
+<!-- Spend Control -->
+<section class="card spend-section">
+	<h2>
+		AI Spend
+		<span class="spend-badge {(data.app.is_cutoff || (data.app.spend_limit_usd > 0 && data.app.spend_usd >= data.app.spend_limit_usd)) ? 'over' : 'ok'}">
+			${(data.app.spend_usd ?? 0).toFixed(4)}
+		</span>
+	</h2>
+
+	{#if spendError}
+		<div class="banner error small">{spendError}</div>
+	{/if}
+	{#if spendSuccess}
+		<div class="banner success small">{spendSuccess}</div>
+	{/if}
+
+	<div class="spend-row">
+		<label class="cred-label" style="flex:1">
+			Spend limit (USD)
+			<span class="cred-hint">0 = unlimited</span>
+			<input type="number" min="0" step="0.01" bind:value={spendLimit} placeholder="0" />
+		</label>
+		<label class="cutoff-toggle">
+			<input type="checkbox" bind:checked={isCutoff} />
+			<span class="cutoff-toggle-text">Manual cutoff</span>
+		</label>
+	</div>
+	<p class="muted" style="margin-top:0.35rem;font-size:0.78rem;">
+		When cutoff is active, the chat will ask users for their own Anthropic API key.
+	</p>
+	<div class="cred-actions" style="margin-top:0.75rem;">
+		<button class="btn-primary small" onclick={saveSpend} disabled={spendSaving}>
+			{spendSaving ? 'Saving…' : 'Save spend settings'}
+		</button>
+	</div>
 </section>
 
 <!-- Edit history / feedbacks -->
@@ -498,6 +564,43 @@
 		background: #f9fafb;
 		min-width: 0;
 	}
+
+	/* Spend section */
+	.spend-section { margin-top: 1rem; margin-bottom: 1.5rem; }
+
+	.spend-badge {
+		display: inline-block;
+		font-size: 0.8rem;
+		font-weight: 500;
+		padding: 0.1rem 0.55rem;
+		border-radius: 999px;
+		margin-left: 0.5rem;
+		vertical-align: middle;
+	}
+
+	.spend-badge.ok { background: #f0fdf4; color: #15803d; }
+	.spend-badge.over { background: #fef2f2; color: #b91c1c; }
+
+	.spend-row {
+		display: flex;
+		gap: 1rem;
+		align-items: flex-end;
+		margin-top: 0.5rem;
+	}
+
+	.cutoff-toggle {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		font-size: 0.875rem;
+		font-weight: 500;
+		color: #374151;
+		white-space: nowrap;
+		padding-bottom: 0.55rem;
+		cursor: pointer;
+	}
+
+	.cutoff-toggle input[type='checkbox'] { width: 1rem; height: 1rem; cursor: pointer; }
 
 	/* Feedback section */
 	.feedback-section { margin-top: 1rem; }

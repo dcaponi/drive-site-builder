@@ -11,6 +11,9 @@ export interface AppConfig {
 	app_owners: string[];
 	allowed_domains: string[];
 	app_password: string;
+	spend_usd: number;
+	spend_limit_usd: number;
+	is_cutoff: boolean;
 }
 
 export interface TableSchema {

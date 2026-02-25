@@ -123,11 +123,16 @@ const APP_HEADERS = [
 	'last_built_at',
 	'app_owners',
 	'app_password',
-	'allowed_domains'
+	'allowed_domains',
+	'spend_usd',
+	'spend_limit_usd',
+	'is_cutoff'
 ] as const;
 
 function serializeConfigValue(key: string, value: unknown): string {
 	if (Array.isArray(value)) return value.join(',');
+	if (typeof value === 'boolean') return value ? 'true' : 'false';
+	if (typeof value === 'number') return String(value);
 	return String(value ?? '');
 }
 
@@ -138,7 +143,7 @@ export async function getConfigSheet(auth: OAuth2Client): Promise<AppConfig[]> {
 
 	const res = await sheets.spreadsheets.values.get({
 		spreadsheetId: sheetId,
-		range: 'apps!A:L'
+		range: 'apps!A:O'
 	});
 
 	const rows = res.data.values ?? [];
@@ -168,7 +173,10 @@ export async function getConfigSheet(auth: OAuth2Client): Promise<AppConfig[]> {
 			last_built_at: r[8] ?? '',
 			app_owners: (r[9] ?? '').split(',').map((e: string) => e.trim()).filter(Boolean),
 			app_password: r[10] ?? '',
-			allowed_domains: (r[11] ?? '').split(',').map((e: string) => e.trim()).filter(Boolean)
+			allowed_domains: (r[11] ?? '').split(',').map((e: string) => e.trim()).filter(Boolean),
+			spend_usd: parseFloat(r[12] ?? '0') || 0,
+			spend_limit_usd: parseFloat(r[13] ?? '0') || 0,
+			is_cutoff: (r[14] ?? '') === 'true'
 		}));
 }
 
@@ -212,7 +220,7 @@ export async function updateAppInConfig(
 	// Get the current full row
 	const fullRes = await sheets.spreadsheets.values.get({
 		spreadsheetId: sheetId,
-		range: `apps!A${sheetRow}:L${sheetRow}`
+		range: `apps!A${sheetRow}:O${sheetRow}`
 	});
 	const current = fullRes.data.values?.[0] ?? [];
 	const updated = APP_HEADERS.map((h, i) => {
@@ -224,10 +232,21 @@ export async function updateAppInConfig(
 
 	await sheets.spreadsheets.values.update({
 		spreadsheetId: sheetId,
-		range: `apps!A${sheetRow}:L${sheetRow}`,
+		range: `apps!A${sheetRow}:O${sheetRow}`,
 		valueInputOption: 'RAW',
 		requestBody: { values: [updated] }
 	});
+}
+
+export async function addAppSpend(
+	auth: OAuth2Client,
+	appId: string,
+	amountUsd: number
+): Promise<void> {
+	if (amountUsd <= 0) return;
+	const app = await getAppById(auth, appId);
+	if (!app) return;
+	await updateAppInConfig(auth, appId, { spend_usd: (app.spend_usd || 0) + amountUsd });
 }
 
 // ─── App database schema ──────────────────────────────────────────────────────

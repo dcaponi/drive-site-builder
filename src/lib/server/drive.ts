@@ -109,7 +109,10 @@ export async function registerApp(
 		last_built_at: '',
 		app_owners: [],
 		allowed_domains: [],
-		app_password: ''
+		app_password: '',
+		spend_usd: 0,
+		spend_limit_usd: 0,
+		is_cutoff: false
 	};
 
 	await addAppToConfig(auth, app);

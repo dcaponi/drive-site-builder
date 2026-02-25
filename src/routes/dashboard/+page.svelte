@@ -57,6 +57,11 @@
 						Not yet built
 					{/if}
 				</p>
+				{#if (app.spend_usd ?? 0) > 0 || (app.spend_limit_usd ?? 0) > 0 || app.is_cutoff}
+					<p class="meta spend {app.is_cutoff ? 'cutoff' : ''}">
+						${(app.spend_usd ?? 0).toFixed(4)} spent{app.spend_limit_usd > 0 ? ` / $${app.spend_limit_usd.toFixed(2)} limit` : ''}{app.is_cutoff ? ' · cutoff' : ''}
+					</p>
+				{/if}
 			</div>
 			<div class="card-status {app.generated_code_doc_id ? 'live' : 'pending'}">
 				{app.generated_code_doc_id ? 'Live' : 'Pending'}
@@ -289,6 +294,8 @@
 	.card-body { flex: 1; min-width: 0; }
 	.card-body h2 { font-size: 1rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 	.card-body .meta { font-size: 0.8rem; color: #9ca3af; margin-top: 0.2rem; }
+	.meta.spend { color: #6b7280; }
+	.meta.spend.cutoff { color: #b91c1c; font-weight: 500; }
 
 	.card-status {
 		font-size: 0.75rem;

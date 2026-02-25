@@ -22,6 +22,11 @@
 	let history = $state<Msg[]>([]);
 	let activeJob = $state<JobState | null>(null);
 
+	// Spend cutoff
+	let cutoffInfo = $state<{ message: string; spend: number; limit: number } | null>(null);
+	let userApiKey = $state('');
+	let showApiKeyInput = $state(false);
+
 	let textarea: HTMLTextAreaElement | undefined = $state();
 	let historyDiv: HTMLDivElement | undefined = $state();
 
@@ -90,11 +95,22 @@
 		sending = true;
 
 		try {
-			const res = await fetch(`/api/apps/${appId}/chat`, {
+			// Retrieve stored API key from session storage
+		const storedKey = sessionStorage.getItem(`apikey_${appId}`) ?? '';
+
+		const res = await fetch(`/api/apps/${appId}/chat`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ message: req })
+				body: JSON.stringify({ message: req, userApiKey: storedKey || undefined })
 			});
+
+			if (res.status === 402) {
+				const data = await res.json().catch(() => ({})) as { message?: string; spend?: number; limit?: number };
+				cutoffInfo = { message: data.message ?? 'Spend limit reached.', spend: data.spend ?? 0, limit: data.limit ?? 0 };
+				// Remove user message we just added since request didn't go through
+				history = history.slice(0, -1);
+				return;
+			}
 
 			if (!res.ok) {
 				const err = await res.json().catch(() => ({}));
@@ -164,6 +180,15 @@
 		open = true;
 		tick().then(scrollToBottom);
 	}
+
+	function saveApiKey() {
+		const key = userApiKey.trim();
+		if (!key) return;
+		sessionStorage.setItem(`apikey_${appId}`, key);
+		cutoffInfo = null;
+		showApiKeyInput = false;
+		tick().then(() => textarea?.focus());
+	}
 </script>
 
 <!-- Floating button -->
@@ -183,6 +208,34 @@
 			<span>Edit this app</span>
 			<button class="close" onclick={() => (open = false)} aria-label="Close">✕</button>
 		</div>
+
+		<!-- Spend cutoff banner -->
+		{#if cutoffInfo}
+			<div class="cutoff-banner">
+				<p class="cutoff-msg">{cutoffInfo.message}</p>
+				{#if cutoffInfo.limit > 0}
+					<p class="cutoff-sub">Spent: ${cutoffInfo.spend.toFixed(4)} / Limit: ${cutoffInfo.limit.toFixed(2)}</p>
+				{/if}
+				{#if !showApiKeyInput}
+					<button class="cutoff-key-btn" onclick={() => (showApiKeyInput = true)}>
+						Use my own Anthropic API key
+					</button>
+				{:else}
+					<div class="api-key-form">
+						<input
+							type="password"
+							bind:value={userApiKey}
+							placeholder="sk-ant-…"
+							class="api-key-input"
+						/>
+						<button class="btn-save-key" onclick={saveApiKey} disabled={!userApiKey.trim()}>
+							Save & continue
+						</button>
+					</div>
+					<p class="api-key-hint">Stored in this browser tab only — never sent to anyone else.</p>
+				{/if}
+			</div>
+		{/if}
 
 		<!-- Active job status bar -->
 		{#if activeJob}
@@ -488,6 +541,80 @@
 		color: #d1d5db;
 		padding: 0 1rem 0.5rem;
 		flex-shrink: 0;
+	}
+
+	/* Cutoff banner */
+	.cutoff-banner {
+		background: #fef9c3;
+		border-bottom: 1px solid #fde68a;
+		padding: 0.75rem 1.1rem;
+		flex-shrink: 0;
+	}
+
+	.cutoff-msg {
+		font-size: 0.8rem;
+		font-weight: 600;
+		color: #92400e;
+		margin-bottom: 0.15rem;
+	}
+
+	.cutoff-sub {
+		font-size: 0.75rem;
+		color: #a16207;
+		margin-bottom: 0.45rem;
+	}
+
+	.cutoff-key-btn {
+		background: none;
+		border: 1px solid #d97706;
+		color: #92400e;
+		padding: 0.3rem 0.65rem;
+		border-radius: 6px;
+		font-size: 0.78rem;
+		cursor: pointer;
+	}
+
+	.cutoff-key-btn:hover { background: #fde68a; }
+
+	.api-key-form {
+		display: flex;
+		gap: 0.4rem;
+		margin-top: 0.3rem;
+	}
+
+	.api-key-input {
+		flex: 1;
+		border: 1px solid #d1d5db;
+		border-radius: 6px;
+		padding: 0.35rem 0.55rem;
+		font-size: 0.8rem;
+		font-family: monospace;
+		min-width: 0;
+	}
+
+	.api-key-input:focus {
+		outline: none;
+		border-color: #4f46e5;
+		box-shadow: 0 0 0 2px #e0e7ff;
+	}
+
+	.btn-save-key {
+		background: #4f46e5;
+		color: #fff;
+		border: none;
+		border-radius: 6px;
+		padding: 0.35rem 0.7rem;
+		font-size: 0.78rem;
+		cursor: pointer;
+		white-space: nowrap;
+	}
+
+	.btn-save-key:disabled { background: #c7d2fe; cursor: not-allowed; }
+
+	.api-key-hint {
+		font-size: 0.72rem;
+		color: #a16207;
+		margin-top: 0.3rem;
 	}
 
 	@media (max-width: 520px) {

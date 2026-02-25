@@ -1,7 +1,7 @@
 import type { RequestHandler } from '@sveltejs/kit';
 import type { SessionUser } from '$lib/server/auth.js';
 import { getAuthedClient } from '$lib/server/auth.js';
-import { getAppById, getAppSchema, getConversationSummaries } from '$lib/server/sheets.js';
+import { getAppById, getAppSchema, getConversationSummaries, addAppSpend } from '$lib/server/sheets.js';
 import { readRequirementsDoc, readGeneratedCode, writeGeneratedCode } from '$lib/server/drive.js';
 import { generateApp, continueApp, isTruncated, stripTruncationMarker } from '$lib/server/anthropic.js';
 import { error } from '@sveltejs/kit';
@@ -26,6 +26,8 @@ export const POST: RequestHandler = async ({ params, locals, url }) => {
 	const stream = new ReadableStream({
 		async start(controller) {
 			const enc = new TextEncoder();
+			let totalCost = 0;
+			const trackCost = (c: number) => { totalCost += c; };
 
 			try {
 				if (shouldContinue) {
@@ -34,38 +36,31 @@ export const POST: RequestHandler = async ({ params, locals, url }) => {
 
 					controller.enqueue(enc.encode('<!-- Continuing from previous output… -->\n'));
 
-					const generator = continueApp(partialCode, requirements, schema, url.origin, appId, uxSummaries);
-					for await (const chunk of generator) {
+					for await (const chunk of continueApp(partialCode, requirements, schema, url.origin, appId, uxSummaries, trackCost)) {
 						continuation += chunk;
 						controller.enqueue(enc.encode(chunk));
 					}
 
 					await writeGeneratedCode(
-						auth,
-						appId,
-						app.name,
+						auth, appId, app.name,
 						partialCode + '\n' + continuation,
-						app.folder_id,
-						app.generated_code_doc_id || undefined
+						app.folder_id, app.generated_code_doc_id || undefined
 					);
 				} else {
 					let fullCode = '';
 
-					const generator = generateApp(requirements, schema, url.origin, appId, uxSummaries);
-					for await (const chunk of generator) {
+					for await (const chunk of generateApp(requirements, schema, url.origin, appId, uxSummaries, trackCost)) {
 						fullCode += chunk;
 						controller.enqueue(enc.encode(chunk));
 					}
 
 					await writeGeneratedCode(
-						auth,
-						appId,
-						app.name,
-						fullCode,
-						app.folder_id,
-						app.generated_code_doc_id || undefined
+						auth, appId, app.name, fullCode,
+						app.folder_id, app.generated_code_doc_id || undefined
 					);
 				}
+
+				if (totalCost > 0) addAppSpend(auth, appId, totalCost).catch(() => {});
 
 				controller.close();
 			} catch (err) {
