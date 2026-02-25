@@ -1,0 +1,73 @@
+import type { PageServerLoad, Actions } from './$types';
+import type { SessionUser } from '$lib/server/auth.js';
+import { getAuthedClient } from '$lib/server/auth.js';
+import { getConfigSheet } from '$lib/server/sheets.js';
+import { listAppFolders, registerApp, verifyRootFolder, createAppScaffold } from '$lib/server/drive.js';
+import { fail } from '@sveltejs/kit';
+
+export const load: PageServerLoad = async ({ locals, url }) => {
+	const user = locals.user as SessionUser;
+	const auth = getAuthedClient(user, url.origin);
+
+	let apps: Awaited<ReturnType<typeof getConfigSheet>> = [];
+	let folders: Array<{ id: string; name: string }> = [];
+	let driveError: string | null = null;
+	let rootFolderName: string | null = null;
+
+	try {
+		// Verify the root folder first — gives a clear error if the ID or token is wrong
+		const root = await verifyRootFolder(auth);
+		rootFolderName = root.name;
+
+		[apps, folders] = await Promise.all([
+			getConfigSheet(auth),
+			listAppFolders(auth)
+		]);
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		driveError = msg.includes('insufficientPermissions') || msg.includes('Request had insufficient')
+			? 'Missing Drive permissions — sign out and sign back in to re-authorize with Drive access.'
+			: msg.includes('invalid_grant') || msg.includes('Token has been expired')
+			? 'Session expired — sign out and sign back in.'
+			: msg;
+	}
+
+	return { apps, folders, driveError, rootFolderName };
+};
+
+export const actions: Actions = {
+	register: async ({ request, locals, url }) => {
+		const user = locals.user as SessionUser;
+		const auth = getAuthedClient(user, url.origin);
+
+		const data = await request.formData();
+		const folderId = String(data.get('folder_id') ?? '').trim();
+		const folderName = String(data.get('folder_name') ?? '').trim();
+
+		if (!folderId) return fail(400, { error: 'Folder ID is required' });
+
+		try {
+			const app = await registerApp(auth, folderId, folderName || folderId);
+			return { success: true, appId: app.id };
+		} catch (err) {
+			return fail(400, { error: err instanceof Error ? err.message : 'Registration failed' });
+		}
+	},
+
+	create: async ({ request, locals, url }) => {
+		const user = locals.user as SessionUser;
+		const auth = getAuthedClient(user, url.origin);
+
+		const data = await request.formData();
+		const name = String(data.get('name') ?? '').trim();
+
+		if (!name) return fail(400, { error: 'App name is required' });
+
+		try {
+			const app = await createAppScaffold(auth, name);
+			return { success: true, appId: app.id, created: true };
+		} catch (err) {
+			return fail(400, { error: err instanceof Error ? err.message : 'Creation failed' });
+		}
+	}
+};
