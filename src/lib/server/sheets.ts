@@ -126,7 +126,10 @@ const APP_HEADERS = [
 	'allowed_domains',
 	'spend_usd',
 	'spend_limit_usd',
-	'is_cutoff'
+	'is_cutoff',
+	'client_slug',
+	'app_slug',
+	'is_home'
 ] as const;
 
 function serializeConfigValue(key: string, value: unknown): string {
@@ -143,7 +146,7 @@ export async function getConfigSheet(auth: OAuth2Client): Promise<AppConfig[]> {
 
 	const res = await sheets.spreadsheets.values.get({
 		spreadsheetId: sheetId,
-		range: 'apps!A:O'
+		range: 'apps!A:R'
 	});
 
 	const rows = res.data.values ?? [];
@@ -176,7 +179,10 @@ export async function getConfigSheet(auth: OAuth2Client): Promise<AppConfig[]> {
 			allowed_domains: (r[11] ?? '').split(',').map((e: string) => e.trim()).filter(Boolean),
 			spend_usd: parseFloat(r[12] ?? '0') || 0,
 			spend_limit_usd: parseFloat(r[13] ?? '0') || 0,
-			is_cutoff: (r[14] ?? '') === 'true'
+			is_cutoff: (r[14] ?? '') === 'true',
+			client_slug: r[15] ?? '',
+			app_slug: r[16] ?? '',
+			is_home: (r[17] ?? '') === 'true'
 		}));
 }
 
@@ -220,7 +226,7 @@ export async function updateAppInConfig(
 	// Get the current full row
 	const fullRes = await sheets.spreadsheets.values.get({
 		spreadsheetId: sheetId,
-		range: `apps!A${sheetRow}:O${sheetRow}`
+		range: `apps!A${sheetRow}:R${sheetRow}`
 	});
 	const current = fullRes.data.values?.[0] ?? [];
 	const updated = APP_HEADERS.map((h, i) => {
@@ -232,7 +238,7 @@ export async function updateAppInConfig(
 
 	await sheets.spreadsheets.values.update({
 		spreadsheetId: sheetId,
-		range: `apps!A${sheetRow}:O${sheetRow}`,
+		range: `apps!A${sheetRow}:R${sheetRow}`,
 		valueInputOption: 'RAW',
 		requestBody: { values: [updated] }
 	});
@@ -247,6 +253,49 @@ export async function addAppSpend(
 	const app = await getAppById(auth, appId);
 	if (!app) return;
 	await updateAppInConfig(auth, appId, { spend_usd: (app.spend_usd || 0) + amountUsd });
+}
+
+export async function getAppBySlug(
+	auth: OAuth2Client,
+	clientSlug: string,
+	appSlug: string
+): Promise<AppConfig | null> {
+	const apps = await getConfigSheet(auth);
+	return apps.find((a) => a.client_slug === clientSlug && a.app_slug === appSlug) ?? null;
+}
+
+export async function getHomeApp(auth: OAuth2Client): Promise<AppConfig | null> {
+	const apps = await getConfigSheet(auth);
+	return apps.find((a) => a.is_home) ?? null;
+}
+
+export async function setHomeApp(auth: OAuth2Client, appId: string): Promise<void> {
+	const sheetId = await getConfigSheetId(auth);
+	const sheets = getSheets(auth);
+
+	const res = await sheets.spreadsheets.values.get({
+		spreadsheetId: sheetId,
+		range: 'apps!A:R'
+	});
+
+	const rows = res.data.values ?? [];
+	// Clear is_home on all rows and set it on the target
+	for (let i = 1; i < rows.length; i++) {
+		const row = rows[i];
+		if (!row[0]) continue;
+		const currentIsHome = (row[17] ?? '') === 'true';
+		const isTarget = row[0] === appId;
+		if (currentIsHome || isTarget) {
+			const sheetRow = i + 1;
+			// Column R = index 18 (1-based) = column R
+			await sheets.spreadsheets.values.update({
+				spreadsheetId: sheetId,
+				range: `apps!R${sheetRow}`,
+				valueInputOption: 'RAW',
+				requestBody: { values: [[isTarget ? 'true' : '']] }
+			});
+		}
+	}
 }
 
 // ─── App database schema ──────────────────────────────────────────────────────

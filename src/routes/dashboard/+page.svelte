@@ -9,7 +9,15 @@
 	let selectedFolderId = $state('');
 	let customName = $state('');
 	let newAppName = $state('');
+	let newClientName = $state('');
+	let registerClientName = $state('');
 	let submitting = $state(false);
+
+	function appPublicUrl(app: typeof data.apps[0]): string {
+		if (app.is_home) return '/';
+		if (app.client_slug && app.app_slug) return `/${app.client_slug}/${app.app_slug}`;
+		return '';
+	}
 
 	function pickFolder(id: string, name: string) {
 		selectedFolderId = id;
@@ -27,8 +35,17 @@
 	<div class="header-actions">
 		<button class="btn-primary" onclick={() => (showCreateModal = true)}>+ Create New App</button>
 		<button class="btn-ghost" onclick={() => (showRegisterModal = true)}>Register Existing</button>
+		{#if data.apps.some((a) => !a.app_slug)}
+			<form method="POST" action="?/migrateApps" use:enhance>
+				<button type="submit" class="btn-ghost migrate">Backfill Slugs</button>
+			</form>
+		{/if}
 	</div>
 </div>
+
+{#if form?.migrated !== undefined}
+	<div class="banner success">Backfilled slugs for {form.migrated} app{form.migrated === 1 ? '' : 's'}.</div>
+{/if}
 
 {#if data.driveError}
 	<div class="banner error">
@@ -57,14 +74,31 @@
 						Not yet built
 					{/if}
 				</p>
+				{#if appPublicUrl(app)}
+					<p class="meta url-badge">
+						{#if app.is_home}
+							<span class="badge-home">Home</span>
+						{/if}
+						<code>{appPublicUrl(app)}</code>
+					</p>
+				{/if}
 				{#if (app.spend_usd ?? 0) > 0 || (app.spend_limit_usd ?? 0) > 0 || app.is_cutoff}
 					<p class="meta spend {app.is_cutoff ? 'cutoff' : ''}">
 						${(app.spend_usd ?? 0).toFixed(4)} spent{app.spend_limit_usd > 0 ? ` / $${app.spend_limit_usd.toFixed(2)} limit` : ''}{app.is_cutoff ? ' · cutoff' : ''}
 					</p>
 				{/if}
 			</div>
-			<div class="card-status {app.generated_code_doc_id ? 'live' : 'pending'}">
-				{app.generated_code_doc_id ? 'Live' : 'Pending'}
+			<div class="card-right">
+				<div class="card-status {app.generated_code_doc_id ? 'live' : 'pending'}">
+					{app.generated_code_doc_id ? 'Live' : 'Pending'}
+				</div>
+				{#if !app.client_slug && !app.is_home}
+					<!-- svelte-ignore a11y_no_static_element_interactions -->
+					<form method="POST" action="?/setHome" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
+						<input type="hidden" name="app_id" value={app.id} />
+						<button type="submit" class="btn-set-home">Set Home</button>
+					</form>
+				{/if}
 			</div>
 		</a>
 	{/each}
@@ -110,6 +144,17 @@
 						bind:value={newAppName}
 						required
 					/>
+				</div>
+				<div class="field">
+					<label for="create_client">Client name</label>
+					<input
+						id="create_client"
+						name="client_name"
+						type="text"
+						placeholder="(optional) e.g. Acme Corp"
+						bind:value={newClientName}
+					/>
+					<small>If set, the app will live at /<em>client-slug</em>/<em>app-slug</em></small>
 				</div>
 				<div class="modal-actions">
 					<button type="button" class="btn-ghost" onclick={() => (showCreateModal = false)}>
@@ -191,6 +236,17 @@
 						bind:value={customName}
 					/>
 				</div>
+				<div class="field">
+					<label for="register_client">Client name</label>
+					<input
+						id="register_client"
+						name="client_name"
+						type="text"
+						placeholder="(optional) e.g. Acme Corp"
+						bind:value={registerClientName}
+					/>
+					<small>If set, the app will live at /<em>client-slug</em>/<em>app-slug</em></small>
+				</div>
 				<div class="modal-actions">
 					<button type="button" class="btn-ghost" onclick={() => (showRegisterModal = false)}>
 						Cancel
@@ -244,6 +300,8 @@
 	}
 
 	.banner.error { background: #fef2f2; border: 1px solid #fca5a5; color: #b91c1c; }
+	.banner.success { background: #f0fdf4; border: 1px solid #86efac; color: #15803d; }
+	.migrate { font-size: 0.8rem; padding: 0.4rem 0.8rem; color: #6b7280; }
 
 	.btn-ghost {
 		background: none;
@@ -297,6 +355,14 @@
 	.meta.spend { color: #6b7280; }
 	.meta.spend.cutoff { color: #b91c1c; font-weight: 500; }
 
+	.card-right {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-end;
+		gap: 0.4rem;
+		flex-shrink: 0;
+	}
+
 	.card-status {
 		font-size: 0.75rem;
 		font-weight: 600;
@@ -306,6 +372,22 @@
 
 	.card-status.live { background: #dcfce7; color: #15803d; }
 	.card-status.pending { background: #fef9c3; color: #854d0e; }
+
+	.url-badge { display: flex; align-items: center; gap: 0.35rem; }
+	.url-badge code { font-size: 0.75rem; color: #4f46e5; background: #eef2ff; padding: 0.1rem 0.4rem; border-radius: 4px; }
+	.badge-home { font-size: 0.7rem; font-weight: 600; background: #dcfce7; color: #15803d; padding: 0.1rem 0.4rem; border-radius: 4px; }
+
+	.btn-set-home {
+		font-size: 0.7rem;
+		padding: 0.2rem 0.5rem;
+		border: 1px solid #d1d5db;
+		border-radius: 6px;
+		background: none;
+		cursor: pointer;
+		color: #6b7280;
+		white-space: nowrap;
+	}
+	.btn-set-home:hover { background: #f0fdf4; border-color: #86efac; color: #15803d; }
 
 	/* Modal */
 	.modal-backdrop {

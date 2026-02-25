@@ -4,7 +4,11 @@
 
 	let { data, children }: { data: LayoutData; children: import('svelte').Snippet } = $props();
 
-	const isServe = $derived(page.url.pathname.startsWith('/serve/'));
+	const isServe = $derived(
+		page.url.pathname.startsWith('/serve/') ||
+		page.route.id === '/[clientSlug]/[appSlug]' ||
+		page.route.id === '/'
+	);
 </script>
 
 <svelte:head>

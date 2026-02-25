@@ -1,8 +1,8 @@
-import type { PageServerLoad } from './$types';
+import type { PageServerLoad, Actions } from './$types';
 import type { SessionUser } from '$lib/server/auth.js';
-import { error } from '@sveltejs/kit';
+import { error, fail } from '@sveltejs/kit';
 import { getAuthedClient } from '$lib/server/auth.js';
-import { getAppById, getAppSchema, getAppFeedbacks } from '$lib/server/sheets.js';
+import { getAppById, getAppSchema, getAppFeedbacks, setHomeApp } from '$lib/server/sheets.js';
 import { readRequirementsDoc } from '$lib/server/drive.js';
 
 export const load: PageServerLoad = async ({ locals, params, url }) => {
@@ -19,4 +19,18 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	]);
 
 	return { app, requirements, schema, feedbacks };
+};
+
+export const actions: Actions = {
+	setHome: async ({ locals, params, url }) => {
+		const user = locals.user as SessionUser;
+		const auth = getAuthedClient(user, url.origin);
+
+		try {
+			await setHomeApp(auth, params.appId!);
+			return { success: true };
+		} catch (err) {
+			return fail(400, { error: err instanceof Error ? err.message : 'Failed to set home app' });
+		}
+	}
 };

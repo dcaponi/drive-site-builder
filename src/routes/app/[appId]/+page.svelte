@@ -1,8 +1,15 @@
 <script lang="ts">
 	import type { PageData } from './$types';
 	import type { ConversationFeedback } from '$lib/server/sheets.js';
+	import { enhance } from '$app/forms';
 
 	let { data }: { data: PageData } = $props();
+
+	function appPublicUrl(): string {
+		if (data.app.is_home) return '/';
+		if (data.app.client_slug && data.app.app_slug) return `/${data.app.client_slug}/${data.app.app_slug}`;
+		return '';
+	}
 
 	let building = $state(false);
 	let buildLog = $state('');
@@ -168,12 +175,36 @@
 	</div>
 	<div class="actions">
 		{#if data.app.generated_code_doc_id}
-			<a href="/serve/{data.app.id}" target="_blank" class="btn-outline">Open App ↗</a>
+			{#if data.app.is_home}
+				<a href="/" target="_blank" class="btn-outline">Open App ↗</a>
+			{:else if data.app.client_slug && data.app.app_slug}
+				<a href="/{data.app.client_slug}/{data.app.app_slug}" target="_blank" class="btn-outline">Open App ↗</a>
+			{:else}
+				<a href="/serve/{data.app.id}" target="_blank" class="btn-outline">Open App ↗</a>
+			{/if}
 		{/if}
 		<button class="btn-primary" onclick={triggerBuild} disabled={building}>
 			{building ? 'Building…' : data.app.generated_code_doc_id ? 'Rebuild' : 'Build App'}
 		</button>
 	</div>
+</div>
+
+<!-- Public URL -->
+<div class="public-url-bar">
+	{#if data.app.is_home}
+		<span class="pub-label">Public URL:</span>
+		<span class="pub-badge home">Home (/)</span>
+	{:else if data.app.client_slug && data.app.app_slug}
+		<span class="pub-label">Public URL:</span>
+		<code class="pub-badge">/{data.app.client_slug}/{data.app.app_slug}</code>
+	{:else}
+		<span class="pub-label muted">Admin only (no public URL)</span>
+	{/if}
+	{#if !data.app.client_slug && !data.app.is_home}
+		<form method="POST" action="?/setHome" use:enhance>
+			<button type="submit" class="btn-outline small">Set as Home App</button>
+		</form>
+	{/if}
 </div>
 
 {#if buildError}
@@ -189,7 +220,16 @@
 
 <div class="two-col">
 	<section class="card">
-		<h2>Requirements</h2>
+		<h2>
+			Requirements
+			{#if data.app.requirements_doc_id}
+				<a
+					href="https://docs.google.com/document/d/{data.app.requirements_doc_id}/edit"
+					target="_blank"
+					class="doc-link"
+				>Edit in Google Docs ↗</a>
+			{/if}
+		</h2>
 		<pre class="content-preview">{data.requirements || 'No requirements doc found.'}</pre>
 	</section>
 
@@ -400,6 +440,20 @@
 	.btn-ghost.small { padding: 0.45rem 0.9rem; font-size: 0.825rem; }
 	.btn-ghost:hover { background: #f9fafb; }
 
+	/* Public URL bar */
+	.public-url-bar {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		margin-bottom: 1.5rem;
+		font-size: 0.875rem;
+	}
+
+	.pub-label { color: #6b7280; font-weight: 500; }
+	.pub-label.muted { color: #9ca3af; font-weight: 400; }
+	.pub-badge { background: #eef2ff; color: #4f46e5; padding: 0.15rem 0.5rem; border-radius: 6px; font-size: 0.8rem; }
+	.pub-badge.home { background: #dcfce7; color: #15803d; font-weight: 600; }
+
 	.banner {
 		padding: 0.75rem 1rem;
 		border-radius: 8px;
@@ -446,7 +500,8 @@
 		padding: 1.5rem;
 	}
 
-	.card h2 { font-size: 1rem; font-weight: 600; margin-bottom: 1rem; color: #374151; }
+	.card h2 { font-size: 1rem; font-weight: 600; margin-bottom: 1rem; color: #374151; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+	.doc-link { font-size: 0.75rem; font-weight: 400; color: #4f46e5; white-space: nowrap; }
 
 	.content-preview {
 		font-size: 0.8rem;

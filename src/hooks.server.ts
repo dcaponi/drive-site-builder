@@ -32,7 +32,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 				headers: { 'Content-Type': 'application/json' }
 			});
 		}
-		return new Response(null, { status: 302, headers: { Location: '/' } });
+		return new Response(null, { status: 302, headers: { Location: '/login' } });
 	}
 
 	return resolve(event);

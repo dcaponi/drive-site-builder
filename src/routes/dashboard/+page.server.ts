@@ -1,8 +1,8 @@
 import type { PageServerLoad, Actions } from './$types';
 import type { SessionUser } from '$lib/server/auth.js';
 import { getAuthedClient } from '$lib/server/auth.js';
-import { getConfigSheet } from '$lib/server/sheets.js';
-import { listAppFolders, registerApp, verifyRootFolder, createAppScaffold } from '$lib/server/drive.js';
+import { getConfigSheet, setHomeApp, updateAppInConfig } from '$lib/server/sheets.js';
+import { listAppFolders, registerApp, verifyRootFolder, createAppScaffold, toSlug } from '$lib/server/drive.js';
 import { fail } from '@sveltejs/kit';
 
 export const load: PageServerLoad = async ({ locals, url }) => {
@@ -43,11 +43,13 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const folderId = String(data.get('folder_id') ?? '').trim();
 		const folderName = String(data.get('folder_name') ?? '').trim();
+		const clientName = String(data.get('client_name') ?? '').trim();
+		const clientSlug = clientName ? toSlug(clientName) : '';
 
 		if (!folderId) return fail(400, { error: 'Folder ID is required' });
 
 		try {
-			const app = await registerApp(auth, folderId, folderName || folderId);
+			const app = await registerApp(auth, folderId, folderName || folderId, clientSlug);
 			return { success: true, appId: app.id };
 		} catch (err) {
 			return fail(400, { error: err instanceof Error ? err.message : 'Registration failed' });
@@ -60,14 +62,54 @@ export const actions: Actions = {
 
 		const data = await request.formData();
 		const name = String(data.get('name') ?? '').trim();
+		const clientName = String(data.get('client_name') ?? '').trim();
+		const clientSlug = clientName ? toSlug(clientName) : undefined;
 
 		if (!name) return fail(400, { error: 'App name is required' });
 
 		try {
-			const app = await createAppScaffold(auth, name);
+			const app = await createAppScaffold(auth, name, clientSlug);
 			return { success: true, appId: app.id, created: true };
 		} catch (err) {
 			return fail(400, { error: err instanceof Error ? err.message : 'Creation failed' });
+		}
+	},
+
+	migrateApps: async ({ locals, url }) => {
+		const user = locals.user as SessionUser;
+		const auth = getAuthedClient(user, url.origin);
+
+		try {
+			const apps = await getConfigSheet(auth);
+			const toBackfill = apps.filter((a) => !a.app_slug);
+			await Promise.all(
+				toBackfill.map((a) =>
+					updateAppInConfig(auth, a.id, {
+						app_slug: toSlug(a.name),
+						client_slug: a.client_slug ?? ''
+					})
+				)
+			);
+			return { migrated: toBackfill.length };
+		} catch (err) {
+			return fail(400, { error: err instanceof Error ? err.message : 'Migration failed' });
+		}
+	},
+
+	setHome: async ({ request, locals, url }) => {
+		const user = locals.user as SessionUser;
+		const auth = getAuthedClient(user, url.origin);
+
+		const data = await request.formData();
+		const appId = String(data.get('app_id') ?? '').trim();
+
+		if (!appId) return fail(400, { error: 'App ID is required' });
+
+		try {
+			await setHomeApp(auth, appId);
+			return { success: true };
+		} catch (err) {
+			return fail(400, { error: err instanceof Error ? err.message : 'Failed to set home app' });
 		}
 	}
 };

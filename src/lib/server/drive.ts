@@ -16,6 +16,48 @@ function getRootFolderId(): string {
 	return id;
 }
 
+// ─── Slug helpers ─────────────────────────────────────────────────────────────
+
+export function toSlug(name: string): string {
+	return name
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, '-')
+		.replace(/^-+|-+$/g, '');
+}
+
+// ─── Client folder helpers ────────────────────────────────────────────────────
+
+export async function findOrCreateClientFolder(
+	auth: OAuth2Client,
+	clientSlug: string
+): Promise<string> {
+	const rootId = getRootFolderId();
+	const drive = getDrive(auth);
+
+	// List top-level folders
+	const res = await drive.files.list({
+		q: `'${rootId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+		fields: 'files(id,name)',
+		...DRIVE_PARAMS
+	});
+
+	const folders = res.data.files ?? [];
+	const match = folders.find((f) => toSlug(f.name ?? '') === clientSlug);
+	if (match) return match.id!;
+
+	// Create new client folder
+	const created = await drive.files.create({
+		requestBody: {
+			name: clientSlug,
+			mimeType: 'application/vnd.google-apps.folder',
+			parents: [rootId]
+		},
+		fields: 'id',
+		...DRIVE_PARAMS
+	});
+	return created.data.id!;
+}
+
 // ─── Root folder verification ─────────────────────────────────────────────────
 
 export async function verifyRootFolder(
@@ -89,7 +131,9 @@ export async function scanAppFolder(auth: OAuth2Client, folderId: string): Promi
 export async function registerApp(
 	auth: OAuth2Client,
 	folderId: string,
-	folderName: string
+	folderName: string,
+	clientSlug?: string,
+	appSlug?: string
 ): Promise<AppConfig> {
 	const { requirementsDocId, databaseSheetId } = await scanAppFolder(auth, folderId);
 
@@ -112,7 +156,10 @@ export async function registerApp(
 		app_password: '',
 		spend_usd: 0,
 		spend_limit_usd: 0,
-		is_cutoff: false
+		is_cutoff: false,
+		client_slug: clientSlug ?? '',
+		app_slug: appSlug ?? toSlug(folderName),
+		is_home: false
 	};
 
 	await addAppToConfig(auth, app);
@@ -216,18 +263,26 @@ Describe the tables and data this app will manage.
 
 export async function createAppScaffold(
 	auth: OAuth2Client,
-	name: string
+	name: string,
+	clientSlug?: string
 ): Promise<AppConfig> {
-	const rootFolderId = getRootFolderId();
 	const drive = getDrive(auth);
 	const { google } = await import('googleapis');
+
+	// Determine parent folder
+	let parentId: string;
+	if (clientSlug) {
+		parentId = await findOrCreateClientFolder(auth, clientSlug);
+	} else {
+		parentId = getRootFolderId();
+	}
 
 	// 1. Create folder
 	const folder = await drive.files.create({
 		requestBody: {
 			name,
 			mimeType: 'application/vnd.google-apps.folder',
-			parents: [rootFolderId]
+			parents: [parentId]
 		},
 		fields: 'id',
 		...DRIVE_PARAMS
@@ -261,7 +316,7 @@ export async function createAppScaffold(
 	});
 
 	// 4. Register and return AppConfig
-	return registerApp(auth, folderId, name);
+	return registerApp(auth, folderId, name, clientSlug ?? '', toSlug(name));
 }
 
 // ─── Append changelog entry to requirements doc ───────────────────────────────

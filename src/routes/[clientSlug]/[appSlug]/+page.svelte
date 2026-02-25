@@ -15,105 +15,72 @@
 		if (iframeEl) iframeEl.src = iframeEl.src;
 	}
 
-	const canChat = data.role === 'app-owner';
+	const canChat = data.role === 'root' || data.role === 'app-owner';
 </script>
 
 <svelte:head>
-	{#if data.homeApp}
-		<title>{data.homeApp.name}</title>
-	{:else}
-		<title>Drive Site Builder</title>
-	{/if}
+	<title>{data.app.name}</title>
 </svelte:head>
 
-{#if data.homeApp}
-	{#if data.showUserAuth}
-		<!-- User sign-up / login UI -->
-		<div class="login-wrapper">
-			<div class="login-card">
-				<h1>{data.homeApp.name}</h1>
+{#if data.showUserAuth}
+	<!-- User sign-up / login UI -->
+	<div class="login-wrapper">
+		<div class="login-card">
+			<h1>{data.app.name}</h1>
 
-				{#if !showAdminLogin}
-					<div class="auth-tabs">
-						<button
-							class="tab-btn {authTab === 'login' ? 'active' : ''}"
-							onclick={() => (authTab = 'login')}
-						>Sign in</button>
-						<button
-							class="tab-btn {authTab === 'signup' ? 'active' : ''}"
-							onclick={() => (authTab = 'signup')}
-						>Create account</button>
-					</div>
+			{#if !showAdminLogin}
+				<!-- Tab switcher -->
+				<div class="auth-tabs">
+					<button
+						class="tab-btn {authTab === 'login' ? 'active' : ''}"
+						onclick={() => (authTab = 'login')}
+					>Sign in</button>
+					<button
+						class="tab-btn {authTab === 'signup' ? 'active' : ''}"
+						onclick={() => (authTab = 'signup')}
+					>Create account</button>
+				</div>
 
-					{#if form?.error}
-						<div class="login-error">{form.error}</div>
-					{/if}
+				{#if form?.error}
+					<div class="login-error">{form.error}</div>
+				{/if}
 
-					{#if authTab === 'login'}
-						<form method="POST" action="?/userLogin" class="login-form">
-							<label>
-								<span>Email</span>
-								<input type="email" name="email" required autocomplete="email" />
-							</label>
-							<label>
-								<span>Password</span>
-								<input type="password" name="password" required autocomplete="current-password" />
-							</label>
-							<button type="submit" class="login-btn">Sign in</button>
-						</form>
-					{:else}
-						<form method="POST" action="?/signup" class="login-form">
-							<label>
-								<span>Email</span>
-								<input type="email" name="email" required autocomplete="email" />
-							</label>
-							<label>
-								<span>Password</span>
-								<input type="password" name="password" required autocomplete="new-password" />
-							</label>
-							<label>
-								<span>Confirm password</span>
-								<input type="password" name="confirm_password" required autocomplete="new-password" />
-							</label>
-							<button type="submit" class="login-btn">Create account</button>
-						</form>
-					{/if}
-
-					<button class="admin-link" onclick={() => (showAdminLogin = true)}>
-						Admin access
-					</button>
-				{:else}
-					<p class="login-subtitle">Admin sign in</p>
-
-					{#if form?.error}
-						<div class="login-error">{form.error}</div>
-					{/if}
-
-					<form method="POST" action="?/login" class="login-form">
+				{#if authTab === 'login'}
+					<form method="POST" action="?/userLogin" class="login-form">
 						<label>
 							<span>Email</span>
 							<input type="email" name="email" required autocomplete="email" />
 						</label>
 						<label>
-							<span>App password</span>
+							<span>Password</span>
 							<input type="password" name="password" required autocomplete="current-password" />
 						</label>
-						<button type="submit" class="login-btn">Sign in as admin</button>
+						<button type="submit" class="login-btn">Sign in</button>
 					</form>
-
-					<button class="admin-link" onclick={() => (showAdminLogin = false)}>
-						← Back to user login
-					</button>
+				{:else}
+					<form method="POST" action="?/signup" class="login-form">
+						<label>
+							<span>Email</span>
+							<input type="email" name="email" required autocomplete="email" />
+						</label>
+						<label>
+							<span>Password</span>
+							<input type="password" name="password" required autocomplete="new-password" />
+						</label>
+						<label>
+							<span>Confirm password</span>
+							<input type="password" name="confirm_password" required autocomplete="new-password" />
+						</label>
+						<button type="submit" class="login-btn">Create account</button>
+					</form>
 				{/if}
-			</div>
-		</div>
 
-	{:else if !data.authed}
-		<!-- Standard app password login -->
-		<div class="login-wrapper">
-			<div class="login-card">
-				<h1>{data.homeApp.name}</h1>
-				<p class="login-subtitle">This app is password protected.</p>
+				<button class="admin-link" onclick={() => (showAdminLogin = true)}>
+					Admin access
+				</button>
+			{:else}
+				<!-- Admin (app password) login -->
+				<p class="login-subtitle">Admin sign in</p>
 
 				{#if form?.error}
 					<div class="login-error">{form.error}</div>
@@ -125,38 +92,57 @@
 						<input type="email" name="email" required autocomplete="email" />
 					</label>
 					<label>
-						<span>Password</span>
+						<span>App password</span>
 						<input type="password" name="password" required autocomplete="current-password" />
 					</label>
-					<button type="submit" class="login-btn">Sign in</button>
+					<button type="submit" class="login-btn">Sign in as admin</button>
 				</form>
-			</div>
-		</div>
 
-	{:else if data.homeApp.generated_code_doc_id}
-		<iframe
-			bind:this={iframeEl}
-			src="/serve/{data.homeApp.id}/content"
-			title={data.homeApp.name}
-		></iframe>
-		{#if canChat}
-			<ChatBubble appId={data.homeApp.id} onUpdated={reloadApp} />
-		{/if}
-	{:else}
-		<div class="not-built">
-			<h2>Not built yet</h2>
-			<p>Go to the <a href="/app/{data.homeApp.id}">app page</a> and click "Build App".</p>
+				<button class="admin-link" onclick={() => (showAdminLogin = false)}>
+					← Back to user login
+				</button>
+			{/if}
 		</div>
+	</div>
+
+{:else if !data.authed}
+	<!-- Standard app password login -->
+	<div class="login-wrapper">
+		<div class="login-card">
+			<h1>{data.app.name}</h1>
+			<p class="login-subtitle">This app is password protected.</p>
+
+			{#if form?.error}
+				<div class="login-error">{form.error}</div>
+			{/if}
+
+			<form method="POST" action="?/login" class="login-form">
+				<label>
+					<span>Email</span>
+					<input type="email" name="email" required autocomplete="email" />
+				</label>
+				<label>
+					<span>Password</span>
+					<input type="password" name="password" required autocomplete="current-password" />
+				</label>
+				<button type="submit" class="login-btn">Sign in</button>
+			</form>
+		</div>
+	</div>
+
+{:else if data.app.generated_code_doc_id}
+	<iframe
+		bind:this={iframeEl}
+		src="/serve/{data.app.id}/content"
+		title={data.app.name}
+	></iframe>
+	{#if canChat}
+		<ChatBubble appId={data.app.id} onUpdated={reloadApp} />
 	{/if}
 {:else}
-	<!-- Fallback: shouldn't normally reach here since server redirects -->
-	<div class="login-wrapper">
-		<div class="login-box">
-			<div class="logo">🗂️</div>
-			<h1>Drive Site Builder</h1>
-			<p class="tagline">Turn Google Drive folders into websites — powered by AI</p>
-			<a href="/login" class="login-btn">Sign in</a>
-		</div>
+	<div class="not-built">
+		<h2>Not built yet</h2>
+		<p>Go to the <a href="/app/{data.app.id}">app page</a> and click "Build App".</p>
 	</div>
 {/if}
 
@@ -185,7 +171,7 @@
 		overflow: auto;
 	}
 
-	.login-card, .login-box {
+	.login-card {
 		background: #fff;
 		border: 1px solid #e5e7eb;
 		border-radius: 16px;
@@ -193,12 +179,6 @@
 		width: 100%;
 		max-width: 380px;
 		box-shadow: 0 4px 24px rgba(0, 0, 0, 0.07);
-		text-align: center;
-	}
-
-	.logo {
-		font-size: 3rem;
-		margin-bottom: 1rem;
 	}
 
 	h1 {
@@ -208,18 +188,13 @@
 		color: #111;
 	}
 
-	.tagline {
-		color: #6b7280;
-		margin-bottom: 2rem;
-		font-size: 0.95rem;
-	}
-
 	.login-subtitle {
 		font-size: 0.875rem;
 		color: #9ca3af;
 		margin-bottom: 1.5rem;
 	}
 
+	/* Tab switcher */
 	.auth-tabs {
 		display: flex;
 		gap: 0;
@@ -268,7 +243,6 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.3rem;
-		text-align: left;
 	}
 
 	.login-form label span {
@@ -301,8 +275,6 @@
 		font-weight: 600;
 		cursor: pointer;
 		margin-top: 0.25rem;
-		text-decoration: none;
-		display: inline-block;
 	}
 
 	.login-btn:hover {

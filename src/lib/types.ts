@@ -14,6 +14,9 @@ export interface AppConfig {
 	spend_usd: number;
 	spend_limit_usd: number;
 	is_cutoff: boolean;
+	client_slug: string;
+	app_slug: string;
+	is_home: boolean;
 }
 
 export interface TableSchema {
