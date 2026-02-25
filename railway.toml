@@ -1,9 +1,4 @@
-[build]
-builder = "nixpacks"
-buildCommand = "npm ci && npm run build"
-
 [deploy]
-startCommand = "node build/index.js"
 healthcheckPath = "/"
 healthcheckTimeout = 30
 restartPolicyType = "on_failure"
