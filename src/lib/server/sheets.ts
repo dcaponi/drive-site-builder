@@ -150,16 +150,23 @@ export async function getConfigSheet(auth: OAuth2Client): Promise<AppConfig[]> {
 	});
 
 	const rows = res.data.values ?? [];
-	if (rows.length === 0) {
-		// Initialize with headers
+
+	// Write (or update) the header row whenever it doesn't exactly match APP_HEADERS
+	const currentHeader = rows[0] ?? [];
+	const headerMatches =
+		currentHeader.length === APP_HEADERS.length &&
+		APP_HEADERS.every((h, i) => currentHeader[i] === h);
+
+	if (!headerMatches) {
 		await sheets.spreadsheets.values.update({
 			spreadsheetId: sheetId,
 			range: 'apps!A1',
 			valueInputOption: 'RAW',
 			requestBody: { values: [[...APP_HEADERS]] }
 		});
-		return [];
 	}
+
+	if (rows.length === 0) return [];
 
 	return rows
 		.slice(1)
