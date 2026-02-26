@@ -19,10 +19,12 @@ const USER_COOKIE_MAX_AGE = 90 * 24 * 3600;
 export const load: PageServerLoad = async ({ locals, url, cookies }) => {
 	const user = locals.user as SessionUser | null;
 
-	if (user) throw redirect(302, '/dashboard');
-
 	// Try to find and serve the home app
-	const auth = isRootAvailable() ? getRootClient(url.origin) : null;
+	const auth = user
+		? getAuthedClient(user, url.origin)
+		: isRootAvailable()
+			? getRootClient(url.origin)
+			: null;
 	if (!auth) throw redirect(302, '/login');
 
 	let homeApp;
@@ -35,6 +37,11 @@ export const load: PageServerLoad = async ({ locals, url, cookies }) => {
 	if (!homeApp) throw redirect(302, '/login');
 
 	// ── Serve the home app with auth logic (same as serve/[appId]) ──
+
+	// Root user (Google OAuth) always has full access
+	if (user) {
+		return { homeApp, authed: true, role: 'root' as const, showUserAuth: false };
+	}
 
 	// Check for user-level auth
 	if (homeApp.allowed_domains.length > 0 && homeApp.app_password) {
