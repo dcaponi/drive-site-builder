@@ -94,7 +94,9 @@ THIRD-PARTY API CREDENTIALS:
 When building features that call third-party APIs, read credentials from localStorage using the
 key pattern: credential_{service_name} (e.g. localStorage.getItem('credential_openai')).
 The value is a JSON object: { value: string, type: 'api_key' | 'bearer_token' }.
-Never hardcode API keys. Always check if the credential exists and prompt the user if missing.`;
+Never hardcode API keys. If the credential is missing, show a user-friendly message like
+"This feature requires configuration by the app owner" — do NOT prompt end users to enter
+API keys unless the app owner explicitly asks for an end-user key input.`;
 }
 
 // ─── Initial build (Opus 4.6) ─────────────────────────────────────────────────
@@ -388,7 +390,7 @@ export async function chatWithTools(
 	const credentials: StoredCredential[] = [];
 	let accumulatedText = '';
 
-	const systemPrompt = `You are a helpful assistant for the "${appName}" web application. You help users understand what the app does and answer questions about it. Here are the app's requirements:\n\n${requirements}\n\nBe concise and friendly. Do not output code unless specifically asked.\n\nWhen building features that call third-party APIs, read credentials from localStorage using the key pattern: credential_{service_name} (e.g. localStorage.getItem('credential_openai')). The value is a JSON object: { value: string, type: 'api_key' | 'bearer_token' }. Never hardcode API keys.\n\nWhen a user provides an API key or bearer token, use the store_credential tool to save it.`;
+	const systemPrompt = `You are a helpful assistant for the "${appName}" web application. You help users understand what the app does and answer questions about it. Here are the app's requirements:\n\n${requirements}\n\nBe concise and friendly. Do not output code unless specifically asked.\n\nWhen a user (the app owner) provides an API key or bearer token, use the store_credential tool to save it. The credential will be stored in the browser's localStorage under the key credential_{service_name}. Generated app code reads credentials from there — the app owner provides the keys, not the end users.`;
 
 	let messages: Anthropic.MessageParam[] = [{ role: 'user', content: message }];
 
