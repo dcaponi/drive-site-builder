@@ -177,11 +177,9 @@ export async function readRequirementsDoc(auth: OAuth2Client, docId: string): Pr
 	return (res.data as string) ?? '';
 }
 
-// ─── Write generated code to a Google Doc ────────────────────────────────────
-// Stores the HTML as a Google Doc in the app's own folder.
-// On each call the old doc (if any) is deleted and a new one created via
-// Drive multipart upload so content is set atomically at creation time —
-// much more reliable than patching via the Docs API.
+// ─── Write generated code to a plain-text file in Drive ──────────────────────
+// Stores the HTML as a plain-text file (not a Google Doc) so that
+// files.update with media works reliably for in-place overwrites.
 
 export async function writeGeneratedCode(
 	auth: OAuth2Client,
@@ -193,13 +191,13 @@ export async function writeGeneratedCode(
 ): Promise<string> {
 	const drive = getDrive(auth);
 
-	// Try to update the existing doc in-place to avoid accumulating copies.
+	// Try to update the existing file in-place to avoid accumulating copies.
 	if (existingDocId) {
 		try {
 			await drive.files.update({
 				fileId: existingDocId,
 				media: {
-					mimeType: 'text/plain',
+					mimeType: 'text/html',
 					body: code
 				},
 				...DRIVE_PARAMS
@@ -212,22 +210,18 @@ export async function writeGeneratedCode(
 
 			return existingDocId;
 		} catch {
-			// Doc missing or inaccessible — fall through to create a new one
+			// File missing or inaccessible — fall through to create a new one
 		}
 	}
 
-	// Create a fresh Google Doc, uploading the HTML as plain text so Drive
-	// stores every character verbatim (no HTML-to-rich-text conversion).
-	// We store unminified so Claude can generate accurate diffs; minification
-	// happens at serve time in content/+server.ts.
 	const created = await drive.files.create({
 		requestBody: {
-			name: `${appName} — Generated`,
-			mimeType: 'application/vnd.google-apps.document',
+			name: `${appName} — Generated.html`,
+			mimeType: 'text/html',
 			parents: [folderId]
 		},
 		media: {
-			mimeType: 'text/plain',
+			mimeType: 'text/html',
 			body: code
 		},
 		fields: 'id',
@@ -244,12 +238,27 @@ export async function writeGeneratedCode(
 	return docId;
 }
 
-// ─── Read generated code from a Google Doc ───────────────────────────────────
+// ─── Read generated code from Drive ──────────────────────────────────────────
 
-export async function readGeneratedCode(auth: OAuth2Client, docId: string): Promise<string> {
+export async function readGeneratedCode(auth: OAuth2Client, fileId: string): Promise<string> {
 	const drive = getDrive(auth);
-	const res = await drive.files.export(
-		{ fileId: docId, mimeType: 'text/plain' },
+
+	// First check if this is a Google Doc (legacy) or a plain file
+	const meta = await drive.files.get({ fileId, fields: 'mimeType', ...DRIVE_PARAMS });
+	const mimeType = meta.data.mimeType ?? '';
+
+	if (mimeType === 'application/vnd.google-apps.document') {
+		// Legacy Google Doc — export as plain text
+		const res = await drive.files.export(
+			{ fileId, mimeType: 'text/plain' },
+			{ responseType: 'text' }
+		);
+		return ((res.data as string) ?? '').trim();
+	}
+
+	// Plain file — download directly
+	const res = await drive.files.get(
+		{ fileId, alt: 'media', ...DRIVE_PARAMS },
 		{ responseType: 'text' }
 	);
 	return ((res.data as string) ?? '').trim();
