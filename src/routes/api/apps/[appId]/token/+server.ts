@@ -15,7 +15,7 @@ export const POST: RequestHandler = async ({ params, locals, url }) => {
 		throw error(400, 'No password set on this app');
 	}
 
-	const token = await signAppToken(app.id, app.app_password, 'public');
+	const token = await signAppToken(app.id, 'public');
 	const magicLink = `${url.origin}/serve/${app.id}?token=${token}`;
 
 	return json({ token, magicLink });

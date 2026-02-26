@@ -2,6 +2,7 @@ import type { RequestHandler } from '@sveltejs/kit';
 import type { SessionUser } from '$lib/server/auth.js';
 import { getAuthedClient } from '$lib/server/auth.js';
 import { getAppById, updateAppInConfig } from '$lib/server/sheets.js';
+import { hashPassword } from '$lib/server/userAuth.js';
 import { json, error } from '@sveltejs/kit';
 
 // PUT: set credentials
@@ -26,7 +27,7 @@ export const PUT: RequestHandler = async ({ params, locals, request, url }) => {
 
 	await updateAppInConfig(auth, app.id, {
 		app_owners: owners.map((e) => e.trim()).filter(Boolean),
-		app_password: password,
+		app_password: hashPassword(password),
 		allowed_domains: (allowed_domains ?? []).map((d) => d.trim()).filter(Boolean),
 		...(spend_limit_usd !== undefined && { spend_limit_usd }),
 		...(is_cutoff !== undefined && { is_cutoff })

@@ -42,7 +42,7 @@ export const GET: RequestHandler = async ({ params, locals, url, cookies }) => {
 	if (!user && app.app_password) {
 		const cookieToken = cookies.get(appCookieName(app.id));
 		if (!cookieToken) throw error(401, 'Not authenticated');
-		const { valid } = await verifyAppToken(cookieToken, app.id, app.app_password);
+		const { valid } = await verifyAppToken(cookieToken, app.id);
 		if (!valid) throw error(401, 'Invalid token');
 	}
 

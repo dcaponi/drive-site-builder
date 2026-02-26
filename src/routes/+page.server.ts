@@ -40,7 +40,7 @@ export const load: PageServerLoad = async ({ locals, url, cookies }) => {
 	if (homeApp.allowed_domains.length > 0 && homeApp.app_password) {
 		const appCookieToken = cookies.get(appCookieName(homeApp.id));
 		if (appCookieToken) {
-			const { valid, role } = await verifyAppToken(appCookieToken, homeApp.id, homeApp.app_password);
+			const { valid, role } = await verifyAppToken(appCookieToken, homeApp.id);
 			if (valid && role === 'app-owner') {
 				return { homeApp, authed: true, role: 'app-owner' as const, showUserAuth: false };
 			}
@@ -67,7 +67,7 @@ export const load: PageServerLoad = async ({ locals, url, cookies }) => {
 	// Check for token in query param (magic link)
 	const tokenParam = url.searchParams.get('token');
 	if (tokenParam) {
-		const { valid } = await verifyAppToken(tokenParam, homeApp.id, homeApp.app_password);
+		const { valid } = await verifyAppToken(tokenParam, homeApp.id);
 		if (valid) {
 			cookies.set(appCookieName(homeApp.id), tokenParam, {
 				path: '/',
@@ -82,7 +82,7 @@ export const load: PageServerLoad = async ({ locals, url, cookies }) => {
 	// Check cookie
 	const cookieToken = cookies.get(appCookieName(homeApp.id));
 	if (cookieToken) {
-		const { valid, role } = await verifyAppToken(cookieToken, homeApp.id, homeApp.app_password);
+		const { valid, role } = await verifyAppToken(cookieToken, homeApp.id);
 		if (valid) {
 			return { homeApp, authed: true, role, showUserAuth: false };
 		}
@@ -103,7 +103,7 @@ export const actions: Actions = {
 		const email = String(data.get('email') ?? '').trim().toLowerCase();
 		const password = String(data.get('password') ?? '');
 
-		if (password !== homeApp.app_password) {
+		if (!verifyPassword(password, homeApp.app_password)) {
 			return fail(401, { error: 'Invalid password' });
 		}
 
@@ -111,7 +111,7 @@ export const actions: Actions = {
 		const role: AppRole =
 			owners.length > 0 && owners.includes(email) ? 'app-owner' : 'public';
 
-		const token = await signAppToken(homeApp.id, homeApp.app_password, role);
+		const token = await signAppToken(homeApp.id, role);
 		cookies.set(appCookieName(homeApp.id), token, {
 			path: '/',
 			httpOnly: true,

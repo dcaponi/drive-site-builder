@@ -52,7 +52,7 @@ export const POST: RequestHandler = async ({ params, request, locals, url, cooki
 		if (app.app_password) {
 			const cookieToken = cookies.get(appCookieName(app.id));
 			if (!cookieToken) return json({ error: 'Unauthorized' }, { status: 401 });
-			const { valid, role } = await verifyAppToken(cookieToken, app.id, app.app_password);
+			const { valid, role } = await verifyAppToken(cookieToken, app.id);
 			if (!valid || role !== 'app-owner') {
 				return json({ error: 'Chat requires app-owner access' }, { status: 403 });
 			}
