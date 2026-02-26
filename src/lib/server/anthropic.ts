@@ -114,7 +114,7 @@ export async function* generateApp(
 
 	const stream = client.messages.stream({
 		model: INITIAL_MODEL,
-		max_tokens: 16000,
+		max_tokens: 64000,
 		// @ts-expect-error - thinking is valid for Opus 4.6
 		thinking: { type: 'adaptive' },
 		system,
@@ -170,7 +170,7 @@ export async function* continueApp(
 
 	const stream = client.messages.stream({
 		model: INITIAL_MODEL,
-		max_tokens: 16000,
+		max_tokens: 64000,
 		// @ts-expect-error - thinking is valid for Opus 4.6
 		thinking: { type: 'adaptive' },
 		system,
@@ -235,7 +235,7 @@ export async function* generateEditDiff(
 
 	const stream = client.messages.stream({
 		model: EDIT_MODEL,
-		max_tokens: 16000,
+		max_tokens: 32000,
 		system,
 		messages: [
 			{
