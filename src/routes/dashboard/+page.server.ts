@@ -3,7 +3,13 @@ import type { SessionUser } from '$lib/server/auth.js';
 import { getAuthedClient } from '$lib/server/auth.js';
 import { getConfigSheet, setHomeApp, updateAppInConfig } from '$lib/server/sheets.js';
 import { listAppFolders, registerApp, verifyRootFolder, createAppScaffold, toSlug } from '$lib/server/drive.js';
+import { hashPassword } from '$lib/server/userAuth.js';
 import { fail } from '@sveltejs/kit';
+
+// Scrypt output: 32-hex-char salt + ":" + 128-hex-char hash
+function isHashedPassword(s: string): boolean {
+	return /^[0-9a-f]{32}:[0-9a-f]{128}$/.test(s);
+}
 
 export const load: PageServerLoad = async ({ locals, url }) => {
 	const user = locals.user as SessionUser;
@@ -23,6 +29,18 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			getConfigSheet(auth),
 			listAppFolders(auth)
 		]);
+
+		// Auto-migrate any plain-text app_passwords to hashed form
+		const needsHash = apps.filter((a) => a.app_password && !isHashedPassword(a.app_password));
+		if (needsHash.length > 0) {
+			await Promise.all(
+				needsHash.map((a) =>
+					updateAppInConfig(auth, a.id, { app_password: hashPassword(a.app_password) })
+				)
+			);
+			// Re-read so the returned apps have hashed passwords
+			apps = await getConfigSheet(auth);
+		}
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
 		driveError = msg.includes('insufficientPermissions') || msg.includes('Request had insufficient')
