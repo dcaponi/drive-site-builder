@@ -193,12 +193,26 @@ export async function writeGeneratedCode(
 ): Promise<string> {
 	const drive = getDrive(auth);
 
-	// Delete the old doc so we don't accumulate stale files
+	// Try to update the existing doc in-place to avoid accumulating copies.
 	if (existingDocId) {
 		try {
-			await drive.files.delete({ fileId: existingDocId, ...DRIVE_PARAMS });
+			await drive.files.update({
+				fileId: existingDocId,
+				media: {
+					mimeType: 'text/plain',
+					body: code
+				},
+				...DRIVE_PARAMS
+			});
+
+			await updateAppInConfig(auth, appId, {
+				last_built_at: new Date().toISOString(),
+				updated_at: new Date().toISOString()
+			});
+
+			return existingDocId;
 		} catch {
-			// Ignore — it may have already been removed manually
+			// Doc missing or inaccessible — fall through to create a new one
 		}
 	}
 
