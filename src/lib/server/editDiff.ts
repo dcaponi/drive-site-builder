@@ -82,6 +82,15 @@ export interface ApplyResult {
  * Returns the updated code on success, or the original + the first failing
  * block so the caller can fall back to full regeneration.
  */
+/**
+ * Strip any leftover SEARCH/REPLACE markers from code.
+ * Keeps only the REPLACE content (the intended new code).
+ */
+export function stripDiffMarkers(code: string): string {
+	return code
+		.replace(/<<<<<<< SEARCH\r?\n[\s\S]*?\n=======\r?\n([\s\S]*?)\n>>>>>>> REPLACE/g, '$1');
+}
+
 export function applyEditBlocks(original: string, blocks: EditBlock[]): ApplyResult {
 	let code = original;
 	for (const block of blocks) {

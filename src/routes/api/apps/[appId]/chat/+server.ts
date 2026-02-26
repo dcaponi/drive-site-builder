@@ -22,7 +22,7 @@ import {
 	classifyIntent,
 	chatWithTools
 } from '$lib/server/anthropic.js';
-import { parseEditBlocks, applyEditBlocks, isFullHtml } from '$lib/server/editDiff.js';
+import { parseEditBlocks, applyEditBlocks, isFullHtml, stripDiffMarkers } from '$lib/server/editDiff.js';
 import { verifyAppToken, appCookieName } from '$lib/server/appAuth.js';
 import { createJob, updateJob } from '$lib/server/jobQueue.js';
 import { error, json } from '@sveltejs/kit';
@@ -146,7 +146,7 @@ export const POST: RequestHandler = async ({ params, request, locals, url, cooki
 			const [requirements, schema, currentCode, uxSummaries] = await Promise.all([
 				readRequirementsDoc(auth, app.requirements_doc_id),
 				getAppSchema(auth, app.database_sheet_id),
-				readGeneratedCode(auth, app.generated_code_doc_id),
+				readGeneratedCode(auth, app.generated_code_doc_id).catch(() => ''),
 				getConversationSummaries(auth, appId).catch(() => [] as string[])
 			]);
 
@@ -186,7 +186,7 @@ export const POST: RequestHandler = async ({ params, request, locals, url, cooki
 				finalCode = '';
 
 				if (isFullHtml(diffOutput)) {
-					finalCode = diffOutput;
+					finalCode = stripDiffMarkers(diffOutput);
 				} else {
 					for await (const chunk of editApp(
 						currentCode, editRequest, requirements, schema, url.origin, appId, uxSummaries, trackCost
@@ -195,6 +195,9 @@ export const POST: RequestHandler = async ({ params, request, locals, url, cooki
 					}
 				}
 			}
+
+			// Safety: strip any stray diff markers before saving
+			finalCode = stripDiffMarkers(finalCode);
 
 			updateJob(jobId, { progress: 'Saving changes…' });
 
