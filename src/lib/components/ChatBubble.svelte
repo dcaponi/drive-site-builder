@@ -117,48 +117,33 @@
 				throw new Error((err as { error?: string }).error ?? `Server error ${res.status}`);
 			}
 
-			const contentType = res.headers.get('Content-Type') ?? '';
+			const data = await res.json();
 
-			if (contentType.includes('application/json')) {
+			if (data.type === 'job' && data.jobId) {
 				// Background job
-				const data = await res.json();
-				if (data.type === 'job' && data.jobId) {
-					const jobId: string = data.jobId;
-					history = [
-						...history,
-						{ type: 'update-ref', jobId, summary: 'Update queued…' }
-					];
-					activeJob = { jobId, status: 'pending', progress: 'Queued…' };
-					await scrollToBottom();
-					startPolling(jobId);
-				}
-			} else {
-				// Streaming chat response
-				if (!res.body) throw new Error('No response body');
-
-				const assistantIdx = history.length;
-				history = [...history, { type: 'assistant', text: '', streaming: true }];
+				const jobId: string = data.jobId;
+				history = [
+					...history,
+					{ type: 'update-ref', jobId, summary: 'Update queued…' }
+				];
+				activeJob = { jobId, status: 'pending', progress: 'Queued…' };
 				await scrollToBottom();
-
-				const reader = res.body.getReader();
-				const dec = new TextDecoder();
-
-				while (true) {
-					const { done: d, value } = await reader.read();
-					if (d) break;
-					const chunk = dec.decode(value);
-					history = history.map((m, i) =>
-						i === assistantIdx && m.type === 'assistant'
-							? { ...m, text: m.text + chunk }
-							: m
-					);
-					await scrollToBottom();
+				startPolling(jobId);
+			} else if (data.type === 'chat') {
+				// Chat response with optional credentials
+				if (data.credentials?.length) {
+					for (const cred of data.credentials as Array<{ service_name: string; credential_value: string; credential_type: string }>) {
+						localStorage.setItem(
+							`credential_${cred.service_name}`,
+							JSON.stringify({ value: cred.credential_value, type: cred.credential_type })
+						);
+					}
+					// Reload the iframe so the app picks up the new credentials
+					const iframe = document.querySelector('iframe');
+					if (iframe) iframe.src = iframe.src;
 				}
-
-				// Mark streaming done
-				history = history.map((m, i) =>
-					i === assistantIdx && m.type === 'assistant' ? { ...m, streaming: false } : m
-				);
+				history = [...history, { type: 'assistant', text: data.text }];
+				await scrollToBottom();
 			}
 		} catch (err) {
 			errorMsg = err instanceof Error ? err.message : 'Something went wrong';

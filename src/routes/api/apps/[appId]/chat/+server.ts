@@ -20,7 +20,7 @@ import {
 	editApp,
 	summariseRequest,
 	classifyIntent,
-	chatConversation
+	chatWithTools
 } from '$lib/server/anthropic.js';
 import { parseEditBlocks, applyEditBlocks, isFullHtml } from '$lib/server/editDiff.js';
 import { verifyAppToken, appCookieName } from '$lib/server/appAuth.js';
@@ -113,36 +113,22 @@ export const POST: RequestHandler = async ({ params, request, locals, url, cooki
 			created_at: now
 		}).catch(() => {});
 
-		const stream = new ReadableStream({
-			async start(controller) {
-				const enc = new TextEncoder();
-				let fullReply = '';
-				try {
-					for await (const chunk of chatConversation(editRequest, app.name, requirements, trackCost)) {
-						fullReply += chunk;
-						controller.enqueue(enc.encode(chunk));
-					}
-					appendConversation(auth, {
-						app_id: appId,
-						role: 'assistant',
-						message: fullReply,
-						summary: '',
-						created_at: new Date().toISOString()
-					}).catch(() => {});
-					if (totalCost > 0) addAppSpend(auth, appId, totalCost).catch(() => {});
-					controller.close();
-				} catch (err) {
-					controller.error(err instanceof Error ? err.message : 'Chat failed');
-				}
-			}
-		});
+		const result = await chatWithTools(editRequest, app.name, requirements, trackCost);
 
-		return new Response(stream, {
-			headers: {
-				'Content-Type': 'text/plain; charset=utf-8',
-				'X-Response-Type': 'chat',
-				'Cache-Control': 'no-cache'
-			}
+		appendConversation(auth, {
+			app_id: appId,
+			role: 'assistant',
+			message: result.text,
+			summary: '',
+			created_at: new Date().toISOString()
+		}).catch(() => {});
+
+		if (totalCost > 0) addAppSpend(auth, appId, totalCost).catch(() => {});
+
+		return json({
+			type: 'chat',
+			text: result.text,
+			credentials: result.credentials
 		});
 	}
 

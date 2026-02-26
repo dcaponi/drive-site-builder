@@ -88,7 +88,13 @@ RULES:
 - Use semantic HTML. Prefer a card-based layout for lists. Forms should be inline where sensible.
 - Auto-refresh data after mutations. Show user-friendly success/error toasts.
 - The app must work without any build step or external dependencies beyond what a CDN provides.
-- If the requirements mention charts or rich UI, use a CDN library (e.g. Chart.js from jsDelivr).`;
+- If the requirements mention charts or rich UI, use a CDN library (e.g. Chart.js from jsDelivr).
+
+THIRD-PARTY API CREDENTIALS:
+When building features that call third-party APIs, read credentials from localStorage using the
+key pattern: credential_{service_name} (e.g. localStorage.getItem('credential_openai')).
+The value is a JSON object: { value: string, type: 'api_key' | 'bearer_token' }.
+Never hardcode API keys. Always check if the credential exists and prompt the user if missing.`;
 }
 
 // ─── Initial build (Opus 4.6) ─────────────────────────────────────────────────
@@ -348,6 +354,94 @@ export async function* chatConversation(
 
 	const finalChat = await stream.finalMessage();
 	if (onCost) onCost(calcCost(EDIT_MODEL, finalChat.usage.input_tokens, finalChat.usage.output_tokens));
+}
+
+// ─── Tool-based chat with credential storage (Sonnet 4.6) ─────────────────────
+
+const CREDENTIAL_TOOLS: Anthropic.Tool[] = [{
+	name: 'store_credential',
+	description: 'Store a third-party API credential in the browser localStorage. Use this when the user provides an API key or bearer token for a service.',
+	input_schema: {
+		type: 'object' as const,
+		properties: {
+			service_name: { type: 'string', description: 'Lowercase identifier for the service (e.g. "openai", "stripe", "sendgrid")' },
+			credential_value: { type: 'string', description: 'The API key or bearer token value' },
+			credential_type: { type: 'string', enum: ['api_key', 'bearer_token'], description: 'The type of credential' }
+		},
+		required: ['service_name', 'credential_value', 'credential_type']
+	}
+}];
+
+export type StoredCredential = {
+	service_name: string;
+	credential_value: string;
+	credential_type: 'api_key' | 'bearer_token';
+};
+
+export async function chatWithTools(
+	message: string,
+	appName: string,
+	requirements: string,
+	onCost?: (cost: number) => void
+): Promise<{ text: string; credentials: StoredCredential[] }> {
+	const client = getClient();
+	const credentials: StoredCredential[] = [];
+	let accumulatedText = '';
+
+	const systemPrompt = `You are a helpful assistant for the "${appName}" web application. You help users understand what the app does and answer questions about it. Here are the app's requirements:\n\n${requirements}\n\nBe concise and friendly. Do not output code unless specifically asked.\n\nWhen building features that call third-party APIs, read credentials from localStorage using the key pattern: credential_{service_name} (e.g. localStorage.getItem('credential_openai')). The value is a JSON object: { value: string, type: 'api_key' | 'bearer_token' }. Never hardcode API keys.\n\nWhen a user provides an API key or bearer token, use the store_credential tool to save it.`;
+
+	let messages: Anthropic.MessageParam[] = [{ role: 'user', content: message }];
+
+	for (let round = 0; round < 4; round++) {
+		const response = await client.messages.create({
+			model: EDIT_MODEL,
+			max_tokens: 1024,
+			system: systemPrompt,
+			tools: CREDENTIAL_TOOLS,
+			messages
+		});
+
+		if (onCost) onCost(calcCost(EDIT_MODEL, response.usage.input_tokens, response.usage.output_tokens));
+
+		// Collect text blocks
+		for (const block of response.content) {
+			if (block.type === 'text') {
+				accumulatedText += block.text;
+			}
+		}
+
+		// If no tool use, we're done
+		if (response.stop_reason !== 'tool_use') break;
+
+		// Process tool calls
+		const toolUseBlocks = response.content.filter((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use');
+		const toolResults: Anthropic.ToolResultBlockParam[] = [];
+
+		for (const toolUse of toolUseBlocks) {
+			if (toolUse.name === 'store_credential') {
+				const input = toolUse.input as { service_name: string; credential_value: string; credential_type: 'api_key' | 'bearer_token' };
+				credentials.push({
+					service_name: input.service_name,
+					credential_value: input.credential_value,
+					credential_type: input.credential_type
+				});
+				toolResults.push({
+					type: 'tool_result',
+					tool_use_id: toolUse.id,
+					content: `Credential for "${input.service_name}" stored successfully.`
+				});
+			}
+		}
+
+		// Continue conversation with tool results
+		messages = [
+			...messages,
+			{ role: 'assistant', content: response.content },
+			{ role: 'user', content: toolResults }
+		];
+	}
+
+	return { text: accumulatedText, credentials };
 }
 
 // ─── Summarise a user edit request (Haiku 4.5, fast) ─────────────────────────
