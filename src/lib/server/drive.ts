@@ -177,9 +177,11 @@ export async function readRequirementsDoc(auth: OAuth2Client, docId: string): Pr
 	return (res.data as string) ?? '';
 }
 
-// ─── Write generated code to a plain-text file in Drive ──────────────────────
-// Stores the HTML as a plain-text file (not a Google Doc) so that
-// files.update with media works reliably for in-place overwrites.
+// ─── Write generated code to Drive ───────────────────────────────────────────
+// Stores HTML as a plain-text file (not a Google Doc). Uses text/plain as the
+// stored mimeType so Google Drive never tries to interpret the HTML content.
+// If the existing file is a legacy Google Doc, it's deleted and replaced with
+// a plain file — Google Docs can't be reliably updated via media upload.
 
 export async function writeGeneratedCode(
 	auth: OAuth2Client,
@@ -191,39 +193,45 @@ export async function writeGeneratedCode(
 ): Promise<string> {
 	const drive = getDrive(auth);
 
-	// Try to update the existing file in-place to avoid accumulating copies.
 	if (existingDocId) {
+		// Check if existing file is a Google Doc (legacy) or plain file
+		let isGoogleDoc = false;
 		try {
-			await drive.files.update({
-				fileId: existingDocId,
-				media: {
-					mimeType: 'text/html',
-					body: code
-				},
-				...DRIVE_PARAMS
-			});
-
-			await updateAppInConfig(auth, appId, {
-				last_built_at: new Date().toISOString(),
-				updated_at: new Date().toISOString()
-			});
-
-			return existingDocId;
+			const meta = await drive.files.get({ fileId: existingDocId, fields: 'mimeType', ...DRIVE_PARAMS });
+			isGoogleDoc = meta.data.mimeType === 'application/vnd.google-apps.document';
 		} catch {
-			// File missing or inaccessible — fall through to create a new one
+			// File doesn't exist — will create a new one below
+		}
+
+		if (isGoogleDoc) {
+			// Google Docs corrupt HTML on update — delete and replace with plain file
+			try { await drive.files.delete({ fileId: existingDocId, ...DRIVE_PARAMS }); } catch { /* ignore */ }
+		} else {
+			// Plain file — update in-place
+			try {
+				await drive.files.update({
+					fileId: existingDocId,
+					media: { mimeType: 'text/plain', body: code },
+					...DRIVE_PARAMS
+				});
+				await updateAppInConfig(auth, appId, {
+					last_built_at: new Date().toISOString(),
+					updated_at: new Date().toISOString()
+				});
+				return existingDocId;
+			} catch {
+				// File missing or inaccessible — fall through to create
+			}
 		}
 	}
 
 	const created = await drive.files.create({
 		requestBody: {
 			name: `${appName} — Generated.html`,
-			mimeType: 'text/html',
+			mimeType: 'text/plain',
 			parents: [folderId]
 		},
-		media: {
-			mimeType: 'text/html',
-			body: code
-		},
+		media: { mimeType: 'text/plain', body: code },
 		fields: 'id',
 		...DRIVE_PARAMS
 	});
@@ -243,12 +251,12 @@ export async function writeGeneratedCode(
 export async function readGeneratedCode(auth: OAuth2Client, fileId: string): Promise<string> {
 	const drive = getDrive(auth);
 
-	// First check if this is a Google Doc (legacy) or a plain file
 	const meta = await drive.files.get({ fileId, fields: 'mimeType', ...DRIVE_PARAMS });
 	const mimeType = meta.data.mimeType ?? '';
 
 	if (mimeType === 'application/vnd.google-apps.document') {
-		// Legacy Google Doc — export as plain text
+		// Legacy Google Doc — the HTML was stored as plain text content inside
+		// the doc, so exporting as text/plain returns the original HTML string.
 		const res = await drive.files.export(
 			{ fileId, mimeType: 'text/plain' },
 			{ responseType: 'text' }
