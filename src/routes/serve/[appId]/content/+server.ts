@@ -1,7 +1,7 @@
 import type { RequestHandler } from '@sveltejs/kit';
 import type { SessionUser } from '$lib/server/auth.js';
 import { getAuthedClient } from '$lib/server/auth.js';
-import { getRootClient, isRootAvailable } from '$lib/server/rootAuth.js';
+import { lookupApp, getUserClient } from '$lib/server/rootAuth.js';
 import { getAppById } from '$lib/server/sheets.js';
 import { readGeneratedCode } from '$lib/server/drive.js';
 import { verifyAppToken, appCookieName } from '$lib/server/appAuth.js';
@@ -27,19 +27,21 @@ async function minifyHtml(code: string): Promise<string> {
 export const GET: RequestHandler = async ({ params, locals, url, cookies }) => {
 	const user = locals.user as SessionUser | null;
 
-	const auth = user
+	// Resolve via registry
+	const reg = lookupApp(params.appId!);
+	if (!reg) throw error(503, 'App owner must log in first');
+
+	const isOwner = user && user.email.toLowerCase() === reg.ownerEmail.toLowerCase();
+	const auth = isOwner
 		? getAuthedClient(user, url.origin)
-		: isRootAvailable()
-			? getRootClient(url.origin)
-			: null;
+		: getUserClient(reg.ownerEmail, url.origin);
+	const rootFolderId = reg.rootFolderId;
 
-	if (!auth) throw error(503, 'Service unavailable — admin must log in first');
-
-	const app = await getAppById(auth, params.appId!);
+	const app = await getAppById(auth, rootFolderId, params.appId!);
 	if (!app) throw error(404, 'App not found');
 
-	// For non-Google visitors, verify they have a valid app token
-	if (!user && app.app_password) {
+	// For non-owner visitors, verify they have a valid app token
+	if (!isOwner && app.app_password) {
 		const cookieToken = cookies.get(appCookieName(app.id));
 		if (!cookieToken) throw error(401, 'Not authenticated');
 		const { valid } = await verifyAppToken(cookieToken, app.id);

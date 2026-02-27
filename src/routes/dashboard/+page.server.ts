@@ -1,9 +1,10 @@
 import type { PageServerLoad, Actions } from './$types';
 import type { SessionUser } from '$lib/server/auth.js';
-import { getAuthedClient } from '$lib/server/auth.js';
+import { getAuthedClient, createSessionToken, makeSessionCookie } from '$lib/server/auth.js';
 import { getConfigSheet, setHomeApp, updateAppInConfig } from '$lib/server/sheets.js';
-import { listAppFolders, registerApp, verifyRootFolder, createAppScaffold, toSlug } from '$lib/server/drive.js';
+import { listAppFolders, registerApp, verifyRootFolder, createAppScaffold, toSlug, ensureUserRootFolder } from '$lib/server/drive.js';
 import { hashPassword } from '$lib/server/userAuth.js';
+import { registerAppOwner, registerSlug } from '$lib/server/rootAuth.js';
 import { fail } from '@sveltejs/kit';
 
 // Scrypt output: 32-hex-char salt + ":" + 128-hex-char hash
@@ -11,9 +12,26 @@ function isHashedPassword(s: string): boolean {
 	return /^[0-9a-f]{32}:[0-9a-f]{128}$/.test(s);
 }
 
-export const load: PageServerLoad = async ({ locals, url }) => {
+export const load: PageServerLoad = async ({ locals, url, cookies }) => {
 	const user = locals.user as SessionUser;
 	const auth = getAuthedClient(user, url.origin);
+
+	// ── Lazy root folder provisioning ─────────────────────────────────────
+	let rootFolderId = user.root_folder_id;
+	if (!rootFolderId) {
+		rootFolderId = await ensureUserRootFolder(auth, user.email);
+		// Update session cookie with root_folder_id so subsequent requests have it
+		const updatedUser: SessionUser = { ...user, root_folder_id: rootFolderId };
+		const token = await createSessionToken(updatedUser);
+		cookies.set('session', token, {
+			path: '/',
+			httpOnly: true,
+			sameSite: 'lax',
+			maxAge: 30 * 24 * 3600
+		});
+		// Also update locals so the rest of this request uses it
+		locals.user = updatedUser;
+	}
 
 	let apps: Awaited<ReturnType<typeof getConfigSheet>> = [];
 	let folders: Array<{ id: string; name: string }> = [];
@@ -22,12 +40,12 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
 	try {
 		// Verify the root folder first — gives a clear error if the ID or token is wrong
-		const root = await verifyRootFolder(auth);
+		const root = await verifyRootFolder(auth, rootFolderId);
 		rootFolderName = root.name;
 
 		[apps, folders] = await Promise.all([
-			getConfigSheet(auth),
-			listAppFolders(auth)
+			getConfigSheet(auth, rootFolderId),
+			listAppFolders(auth, rootFolderId)
 		]);
 
 		// Auto-migrate any plain-text app_passwords to hashed form
@@ -35,11 +53,19 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		if (needsHash.length > 0) {
 			await Promise.all(
 				needsHash.map((a) =>
-					updateAppInConfig(auth, a.id, { app_password: hashPassword(a.app_password) })
+					updateAppInConfig(auth, rootFolderId!, a.id, { app_password: hashPassword(a.app_password) })
 				)
 			);
 			// Re-read so the returned apps have hashed passwords
-			apps = await getConfigSheet(auth);
+			apps = await getConfigSheet(auth, rootFolderId);
+		}
+
+		// Populate app + slug registries for public-serving routes
+		for (const app of apps) {
+			registerAppOwner(app.id, user.email, rootFolderId);
+			if (app.client_slug && app.app_slug) {
+				registerSlug(app.client_slug, app.app_slug, app.id);
+			}
 		}
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
@@ -57,6 +83,7 @@ export const actions: Actions = {
 	register: async ({ request, locals, url }) => {
 		const user = locals.user as SessionUser;
 		const auth = getAuthedClient(user, url.origin);
+		const rootFolderId = user.root_folder_id!;
 
 		const data = await request.formData();
 		const folderId = String(data.get('folder_id') ?? '').trim();
@@ -67,7 +94,11 @@ export const actions: Actions = {
 		if (!folderId) return fail(400, { error: 'Folder ID is required' });
 
 		try {
-			const app = await registerApp(auth, folderId, folderName || folderId, clientSlug);
+			const app = await registerApp(auth, rootFolderId, folderId, folderName || folderId, clientSlug);
+			registerAppOwner(app.id, user.email, rootFolderId);
+			if (app.client_slug && app.app_slug) {
+				registerSlug(app.client_slug, app.app_slug, app.id);
+			}
 			return { success: true, appId: app.id };
 		} catch (err) {
 			return fail(400, { error: err instanceof Error ? err.message : 'Registration failed' });
@@ -77,6 +108,7 @@ export const actions: Actions = {
 	create: async ({ request, locals, url }) => {
 		const user = locals.user as SessionUser;
 		const auth = getAuthedClient(user, url.origin);
+		const rootFolderId = user.root_folder_id!;
 
 		const data = await request.formData();
 		const name = String(data.get('name') ?? '').trim();
@@ -86,7 +118,11 @@ export const actions: Actions = {
 		if (!name) return fail(400, { error: 'App name is required' });
 
 		try {
-			const app = await createAppScaffold(auth, name, clientSlug);
+			const app = await createAppScaffold(auth, rootFolderId, name, clientSlug);
+			registerAppOwner(app.id, user.email, rootFolderId);
+			if (app.client_slug && app.app_slug) {
+				registerSlug(app.client_slug, app.app_slug, app.id);
+			}
 			return { success: true, appId: app.id, created: true };
 		} catch (err) {
 			return fail(400, { error: err instanceof Error ? err.message : 'Creation failed' });
@@ -96,13 +132,14 @@ export const actions: Actions = {
 	migrateApps: async ({ locals, url }) => {
 		const user = locals.user as SessionUser;
 		const auth = getAuthedClient(user, url.origin);
+		const rootFolderId = user.root_folder_id!;
 
 		try {
-			const apps = await getConfigSheet(auth);
+			const apps = await getConfigSheet(auth, rootFolderId);
 			const toBackfill = apps.filter((a) => !a.app_slug);
 			await Promise.all(
 				toBackfill.map((a) =>
-					updateAppInConfig(auth, a.id, {
+					updateAppInConfig(auth, rootFolderId, a.id, {
 						app_slug: toSlug(a.name),
 						client_slug: a.client_slug ?? ''
 					})
@@ -117,6 +154,7 @@ export const actions: Actions = {
 	setHome: async ({ request, locals, url }) => {
 		const user = locals.user as SessionUser;
 		const auth = getAuthedClient(user, url.origin);
+		const rootFolderId = user.root_folder_id!;
 
 		const data = await request.formData();
 		const appId = String(data.get('app_id') ?? '').trim();
@@ -124,7 +162,7 @@ export const actions: Actions = {
 		if (!appId) return fail(400, { error: 'App ID is required' });
 
 		try {
-			await setHomeApp(auth, appId);
+			await setHomeApp(auth, rootFolderId, appId);
 			return { success: true };
 		} catch (err) {
 			return fail(400, { error: err instanceof Error ? err.message : 'Failed to set home app' });

@@ -1,7 +1,7 @@
 import type { RequestHandler } from '@sveltejs/kit';
 import type { SessionUser } from '$lib/server/auth.js';
 import { getAuthedClient } from '$lib/server/auth.js';
-import { getRootClient, isRootAvailable } from '$lib/server/rootAuth.js';
+import { lookupApp, getUserClient } from '$lib/server/rootAuth.js';
 import {
 	getAppById,
 	getAppSchema,
@@ -39,14 +39,19 @@ export const POST: RequestHandler = async ({ params, request, locals, url, cooki
 	const user = locals.user as SessionUser | null;
 	const appId = params.appId!;
 
-	let auth;
-	if (user) {
-		auth = getAuthedClient(user, url.origin);
-	} else {
-		if (!isRootAvailable()) return json({ error: 'Service unavailable' }, { status: 503 });
-		auth = getRootClient(url.origin);
+	// Resolve via registry for proper tenant isolation
+	const reg = lookupApp(appId);
+	if (!reg) return json({ error: 'App owner must log in first' }, { status: 503 });
 
-		const app = await getAppById(auth, appId);
+	const isOwner = user && user.email.toLowerCase() === reg.ownerEmail.toLowerCase();
+	const auth = isOwner
+		? getAuthedClient(user, url.origin)
+		: getUserClient(reg.ownerEmail, url.origin);
+	const rootFolderId = reg.rootFolderId;
+
+	// Non-owner, non-Google users need app-owner token
+	if (!isOwner) {
+		const app = await getAppById(auth, rootFolderId, appId);
 		if (!app) return json({ error: 'App not found' }, { status: 404 });
 
 		if (app.app_password) {
@@ -68,7 +73,7 @@ export const POST: RequestHandler = async ({ params, request, locals, url, cooki
 	// User-supplied API key (bypasses spend limit)
 	const userApiKey: string | null = (body.userApiKey as string | null) ?? null;
 
-	const app = await getAppById(auth, appId);
+	const app = await getAppById(auth, rootFolderId, appId);
 	if (!app) throw error(404, 'App not found');
 
 	// ── Cutoff check ─────────────────────────────────────────────────────────
@@ -105,7 +110,7 @@ export const POST: RequestHandler = async ({ params, request, locals, url, cooki
 		);
 
 		const now = new Date().toISOString();
-		appendConversation(auth, {
+		appendConversation(auth, rootFolderId, {
 			app_id: appId,
 			role: 'user',
 			message: editRequest,
@@ -115,7 +120,7 @@ export const POST: RequestHandler = async ({ params, request, locals, url, cooki
 
 		const result = await chatWithTools(editRequest, app.name, requirements, trackCost);
 
-		appendConversation(auth, {
+		appendConversation(auth, rootFolderId, {
 			app_id: appId,
 			role: 'assistant',
 			message: result.text,
@@ -123,7 +128,7 @@ export const POST: RequestHandler = async ({ params, request, locals, url, cooki
 			created_at: new Date().toISOString()
 		}).catch(() => {});
 
-		if (totalCost > 0) addAppSpend(auth, appId, totalCost).catch(() => {});
+		if (totalCost > 0) addAppSpend(auth, rootFolderId, appId, totalCost).catch(() => {});
 
 		return json({
 			type: 'chat',
@@ -147,11 +152,11 @@ export const POST: RequestHandler = async ({ params, request, locals, url, cooki
 				readRequirementsDoc(auth, app.requirements_doc_id),
 				getAppSchema(auth, app.database_sheet_id),
 				readGeneratedCode(auth, app.generated_code_doc_id).catch(() => ''),
-				getConversationSummaries(auth, appId).catch(() => [] as string[])
+				getConversationSummaries(auth, rootFolderId, appId).catch(() => [] as string[])
 			]);
 
 			const now = new Date().toISOString();
-			appendConversation(auth, {
+			appendConversation(auth, rootFolderId, {
 				app_id: appId,
 				role: 'user',
 				message: editRequest,
@@ -204,7 +209,7 @@ export const POST: RequestHandler = async ({ params, request, locals, url, cooki
 			const [summary] = await Promise.all([
 				summaryPromise,
 				writeGeneratedCode(
-					auth, appId, app.name, finalCode,
+					auth, rootFolderId, appId, app.name, finalCode,
 					app.folder_id, app.generated_code_doc_id || undefined
 				)
 			]);
@@ -213,7 +218,7 @@ export const POST: RequestHandler = async ({ params, request, locals, url, cooki
 				appendToRequirementsDoc(auth, app.requirements_doc_id, summary, new Date().toISOString()).catch(() => {});
 			}
 
-			await appendConversation(auth, {
+			await appendConversation(auth, rootFolderId, {
 				app_id: appId,
 				role: 'assistant',
 				message: `Edit applied: ${editRequest}`,
@@ -221,7 +226,7 @@ export const POST: RequestHandler = async ({ params, request, locals, url, cooki
 				created_at: new Date().toISOString()
 			});
 
-			if (totalCost > 0) await addAppSpend(auth, appId, totalCost).catch(() => {});
+			if (totalCost > 0) await addAppSpend(auth, rootFolderId, appId, totalCost).catch(() => {});
 
 			updateJob(jobId, { status: 'done', progress: 'Done' });
 		} catch (err) {

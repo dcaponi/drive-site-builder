@@ -8,7 +8,9 @@ import { json, error } from '@sveltejs/kit';
 export const PATCH: RequestHandler = async ({ params, locals, request, url }) => {
 	const user = locals.user as SessionUser;
 	const auth = getAuthedClient(user, url.origin);
-	const app = await getAppById(auth, params.appId!);
+	const rootFolderId = user.root_folder_id!;
+
+	const app = await getAppById(auth, rootFolderId, params.appId!);
 	if (!app) throw error(404, 'App not found');
 
 	const body = await request.json().catch(() => ({}));
@@ -25,6 +27,6 @@ export const PATCH: RequestHandler = async ({ params, locals, request, url }) =>
 		throw error(400, 'No valid fields to update');
 	}
 
-	await updateAppInConfig(auth, app.id, updates as never);
+	await updateAppInConfig(auth, rootFolderId, app.id, updates as never);
 	return json({ ok: true });
 };

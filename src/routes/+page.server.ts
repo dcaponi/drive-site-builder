@@ -1,7 +1,7 @@
 import type { PageServerLoad, Actions } from './$types';
 import type { SessionUser } from '$lib/server/auth.js';
 import { getAuthedClient } from '$lib/server/auth.js';
-import { getRootClient, isRootAvailable } from '$lib/server/rootAuth.js';
+import { getFirstUserEmail, getUserClient, getUserSession } from '$lib/server/rootAuth.js';
 import { getAppById, getHomeApp } from '$lib/server/sheets.js';
 import { findAppUser, createAppUser } from '$lib/server/sheets.js';
 import { verifyAppToken, signAppToken, appCookieName, type AppRole } from '$lib/server/appAuth.js';
@@ -19,17 +19,34 @@ const USER_COOKIE_MAX_AGE = 90 * 24 * 3600;
 export const load: PageServerLoad = async ({ locals, url, cookies }) => {
 	const user = locals.user as SessionUser | null;
 
-	// Try to find and serve the home app
-	const auth = user
-		? getAuthedClient(user, url.origin)
-		: isRootAvailable()
-			? getRootClient(url.origin)
-			: null;
-	if (!auth) throw redirect(302, '/login');
+	// Find the first available user's credentials for home app resolution
+	const firstEmail = getFirstUserEmail();
+	if (!firstEmail) throw redirect(302, '/login');
+
+	let auth;
+	let rootFolderId: string;
+	let isOwner = false;
+
+	if (user && user.email.toLowerCase() === firstEmail.toLowerCase()) {
+		auth = getAuthedClient(user, url.origin);
+		rootFolderId = user.root_folder_id!;
+		isOwner = true;
+	} else {
+		// Use cached credentials for the primary user
+		try {
+			auth = getUserClient(firstEmail, url.origin);
+		} catch {
+			throw redirect(302, '/login');
+		}
+		// Import getUserSession to get rootFolderId
+		const session = getUserSession(firstEmail);
+		if (!session?.root_folder_id) throw redirect(302, '/login');
+		rootFolderId = session.root_folder_id;
+	}
 
 	let homeApp;
 	try {
-		homeApp = await getHomeApp(auth);
+		homeApp = await getHomeApp(auth, rootFolderId!);
 	} catch {
 		throw redirect(302, '/login');
 	}
@@ -38,8 +55,8 @@ export const load: PageServerLoad = async ({ locals, url, cookies }) => {
 
 	// ── Serve the home app with auth logic (same as serve/[appId]) ──
 
-	// Root user (Google OAuth) always has full access
-	if (user) {
+	// ISOLATION: Only the app owner gets root role
+	if (user && isOwner) {
 		return { homeApp, authed: true, role: 'root' as const, showUserAuth: false };
 	}
 
@@ -100,10 +117,14 @@ export const load: PageServerLoad = async ({ locals, url, cookies }) => {
 
 export const actions: Actions = {
 	login: async ({ url, request, cookies }) => {
-		if (!isRootAvailable()) return fail(503, { error: 'Service unavailable' });
+		const firstEmail = getFirstUserEmail();
+		if (!firstEmail) return fail(503, { error: 'Service unavailable' });
 
-		const auth = getRootClient(url.origin);
-		const homeApp = await getHomeApp(auth);
+		const auth = getUserClient(firstEmail, url.origin);
+		const session = getUserSession(firstEmail);
+		if (!session?.root_folder_id) return fail(503, { error: 'Service unavailable' });
+
+		const homeApp = await getHomeApp(auth, session.root_folder_id);
 		if (!homeApp) return fail(404, { error: 'App not found' });
 
 		const data = await request.formData();
@@ -130,10 +151,15 @@ export const actions: Actions = {
 	},
 
 	signup: async ({ url, request, cookies }) => {
-		if (!isRootAvailable()) return fail(503, { error: 'Service unavailable' });
+		const firstEmail = getFirstUserEmail();
+		if (!firstEmail) return fail(503, { error: 'Service unavailable' });
 
-		const auth = getRootClient(url.origin);
-		const homeApp = await getHomeApp(auth);
+		const auth = getUserClient(firstEmail, url.origin);
+		const session = getUserSession(firstEmail);
+		if (!session?.root_folder_id) return fail(503, { error: 'Service unavailable' });
+		const rootFolderId = session.root_folder_id;
+
+		const homeApp = await getHomeApp(auth, rootFolderId);
 		if (!homeApp) return fail(404, { error: 'App not found' });
 
 		const data = await request.formData();
@@ -153,11 +179,11 @@ export const actions: Actions = {
 			}
 		}
 
-		const existing = await findAppUser(auth, homeApp.id, email);
+		const existing = await findAppUser(auth, rootFolderId, homeApp.id, email);
 		if (existing) return fail(409, { error: 'An account with this email already exists' });
 
 		const passwordHash = hashPassword(password);
-		const userId = await createAppUser(auth, homeApp.id, email, passwordHash);
+		const userId = await createAppUser(auth, rootFolderId, homeApp.id, email, passwordHash);
 		const token = await signUserToken(homeApp.id, userId, email);
 
 		cookies.set(userCookieName(homeApp.id), token, {
@@ -171,10 +197,15 @@ export const actions: Actions = {
 	},
 
 	userLogin: async ({ url, request, cookies }) => {
-		if (!isRootAvailable()) return fail(503, { error: 'Service unavailable' });
+		const firstEmail = getFirstUserEmail();
+		if (!firstEmail) return fail(503, { error: 'Service unavailable' });
 
-		const auth = getRootClient(url.origin);
-		const homeApp = await getHomeApp(auth);
+		const auth = getUserClient(firstEmail, url.origin);
+		const session = getUserSession(firstEmail);
+		if (!session?.root_folder_id) return fail(503, { error: 'Service unavailable' });
+		const rootFolderId = session.root_folder_id;
+
+		const homeApp = await getHomeApp(auth, rootFolderId);
 		if (!homeApp) return fail(404, { error: 'App not found' });
 
 		const data = await request.formData();
@@ -183,7 +214,7 @@ export const actions: Actions = {
 
 		if (!email || !password) return fail(400, { error: 'Email and password are required' });
 
-		const appUser = await findAppUser(auth, homeApp.id, email);
+		const appUser = await findAppUser(auth, rootFolderId, homeApp.id, email);
 		if (!appUser || !verifyPassword(password, appUser.password_hash)) {
 			return fail(401, { error: 'Invalid email or password' });
 		}
@@ -200,13 +231,20 @@ export const actions: Actions = {
 	},
 
 	userLogout: async ({ url, cookies }) => {
-		if (!isRootAvailable()) return fail(503, { error: 'Service unavailable' });
+		const firstEmail = getFirstUserEmail();
+		if (!firstEmail) throw redirect(302, '/');
 
-		const auth = getRootClient(url.origin);
-		const homeApp = await getHomeApp(auth);
-		if (!homeApp) throw redirect(302, '/');
-
-		cookies.delete(userCookieName(homeApp.id), { path: '/' });
+		try {
+			const auth = getUserClient(firstEmail, url.origin);
+			const { getUserSession } = await import('$lib/server/rootAuth.js');
+			const session = getUserSession(firstEmail);
+			if (session?.root_folder_id) {
+				const homeApp = await getHomeApp(auth, session.root_folder_id);
+				if (homeApp) {
+					cookies.delete(userCookieName(homeApp.id), { path: '/' });
+				}
+			}
+		} catch { /* ignore */ }
 		throw redirect(302, '/');
 	}
 };

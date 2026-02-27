@@ -1,52 +1,201 @@
-// Caches the root (admin) user's Google credentials server-side.
-// Populated on every root-user request via hooks.server.ts.
-// Used to perform Drive/Sheets operations on behalf of non-Google visitors.
+// Multi-user credential cache + app/slug registry for tenant isolation.
+// Replaces the old single-user "root credentials" approach.
 //
-// Credentials are persisted to .root-credentials.json so they survive server
-// restarts. The root user only needs to log in once; the refresh token handles
-// re-authentication automatically.
+// Credentials are persisted to .user-credentials.json and the app/slug
+// registries to .app-registry.json so they survive server restarts.
 
-import { readFileSync, writeFileSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { resolve } from 'path';
 import type { SessionUser } from './auth.js';
 import { getAuthedClient } from './auth.js';
 import type { OAuth2Client } from 'google-auth-library';
 
-const CRED_FILE = resolve('.root-credentials.json');
+// ─── File paths ──────────────────────────────────────────────────────────────
 
-let _rootUser: SessionUser | null = null;
+const CRED_FILE = resolve('.user-credentials.json');
+const REGISTRY_FILE = resolve('.app-registry.json');
+const OLD_CRED_FILE = resolve('.root-credentials.json');
 
-/** Try loading persisted credentials from disk (runs once on first access). */
+// ─── In-memory stores ───────────────────────────────────────────────────────
+
+/** email → SessionUser */
+const _credentials = new Map<string, SessionUser>();
+
+/** appId → { ownerEmail, rootFolderId } */
+const _appRegistry = new Map<string, { ownerEmail: string; rootFolderId: string }>();
+
+/** "clientSlug/appSlug" → appId */
+const _slugRegistry = new Map<string, string>();
+
+let _loaded = false;
+
+// ─── Persistence helpers ────────────────────────────────────────────────────
+
 function loadFromDisk(): void {
-	if (_rootUser) return;
+	if (_loaded) return;
+	_loaded = true;
+
+	// Migrate old single-user credentials if the new file doesn't exist yet
+	if (!existsSync(CRED_FILE) && existsSync(OLD_CRED_FILE)) {
+		try {
+			const raw = readFileSync(OLD_CRED_FILE, 'utf-8');
+			const user = JSON.parse(raw) as SessionUser;
+			_credentials.set(user.email.toLowerCase(), user);
+			persistCredentials();
+		} catch {
+			// Ignore — old file is malformed
+		}
+	}
+
+	// Load user credentials
 	try {
 		const raw = readFileSync(CRED_FILE, 'utf-8');
-		_rootUser = JSON.parse(raw) as SessionUser;
+		const obj = JSON.parse(raw) as Record<string, SessionUser>;
+		for (const [email, user] of Object.entries(obj)) {
+			_credentials.set(email.toLowerCase(), user);
+		}
 	} catch {
-		// File doesn't exist yet or is unreadable — that's fine.
+		// File doesn't exist yet or is unreadable
 	}
-}
 
-export function setRootCredentials(user: SessionUser): void {
-	_rootUser = user;
+	// Load app + slug registries
 	try {
-		writeFileSync(CRED_FILE, JSON.stringify(user), { mode: 0o600 });
+		const raw = readFileSync(REGISTRY_FILE, 'utf-8');
+		const obj = JSON.parse(raw) as {
+			apps?: Record<string, { ownerEmail: string; rootFolderId: string }>;
+			slugs?: Record<string, string>;
+		};
+		if (obj.apps) {
+			for (const [appId, info] of Object.entries(obj.apps)) {
+				_appRegistry.set(appId, info);
+			}
+		}
+		if (obj.slugs) {
+			for (const [slug, appId] of Object.entries(obj.slugs)) {
+				_slugRegistry.set(slug, appId);
+			}
+		}
 	} catch {
-		// Non-fatal — in-memory cache still works for this process lifetime.
+		// File doesn't exist yet
 	}
 }
 
-export function getRootClient(origin: string): OAuth2Client {
+function persistCredentials(): void {
+	try {
+		const obj: Record<string, SessionUser> = {};
+		for (const [email, user] of _credentials) {
+			obj[email] = user;
+		}
+		writeFileSync(CRED_FILE, JSON.stringify(obj, null, 2), { mode: 0o600 });
+	} catch {
+		// Non-fatal
+	}
+}
+
+function persistRegistry(): void {
+	try {
+		const apps: Record<string, { ownerEmail: string; rootFolderId: string }> = {};
+		for (const [appId, info] of _appRegistry) {
+			apps[appId] = info;
+		}
+		const slugs: Record<string, string> = {};
+		for (const [slug, appId] of _slugRegistry) {
+			slugs[slug] = appId;
+		}
+		writeFileSync(REGISTRY_FILE, JSON.stringify({ apps, slugs }, null, 2), { mode: 0o600 });
+	} catch {
+		// Non-fatal
+	}
+}
+
+// ─── Public API: credentials ────────────────────────────────────────────────
+
+export function setUserCredentials(user: SessionUser): void {
 	loadFromDisk();
-	if (!_rootUser) {
+	_credentials.set(user.email.toLowerCase(), user);
+	persistCredentials();
+}
+
+export function getUserClient(email: string, origin: string): OAuth2Client {
+	loadFromDisk();
+	const user = _credentials.get(email.toLowerCase());
+	if (!user) {
 		throw new Error(
-			'Root credentials not available — the admin user must log in at least once first.'
+			`Credentials not available for ${email} — that user must log in at least once first.`
 		);
 	}
-	return getAuthedClient(_rootUser, origin);
+	return getAuthedClient(user, origin);
 }
 
-export function isRootAvailable(): boolean {
+export function getUserSession(email: string): SessionUser | null {
 	loadFromDisk();
-	return _rootUser !== null;
+	return _credentials.get(email.toLowerCase()) ?? null;
+}
+
+export function isAnyUserAvailable(): boolean {
+	loadFromDisk();
+	return _credentials.size > 0;
+}
+
+/** Get the first available user's email (for home-app resolution). */
+export function getFirstUserEmail(): string | null {
+	loadFromDisk();
+	const first = _credentials.keys().next();
+	return first.done ? null : first.value;
+}
+
+// ─── Public API: app registry ───────────────────────────────────────────────
+
+export function registerAppOwner(
+	appId: string,
+	ownerEmail: string,
+	rootFolderId: string
+): void {
+	loadFromDisk();
+	_appRegistry.set(appId, { ownerEmail: ownerEmail.toLowerCase(), rootFolderId });
+	persistRegistry();
+}
+
+export function registerSlug(
+	clientSlug: string,
+	appSlug: string,
+	appId: string
+): void {
+	if (!clientSlug || !appSlug) return;
+	loadFromDisk();
+	_slugRegistry.set(`${clientSlug}/${appSlug}`, appId);
+	persistRegistry();
+}
+
+export function lookupApp(
+	appId: string
+): { ownerEmail: string; rootFolderId: string } | null {
+	loadFromDisk();
+	return _appRegistry.get(appId) ?? null;
+}
+
+export function lookupSlug(
+	clientSlug: string,
+	appSlug: string
+): string | null {
+	loadFromDisk();
+	return _slugRegistry.get(`${clientSlug}/${appSlug}`) ?? null;
+}
+
+// ─── Backwards compatibility ────────────────────────────────────────────────
+// These wrappers let older code continue working during transition.
+
+/** @deprecated Use getUserClient or lookupApp instead */
+export function getRootClient(origin: string): OAuth2Client {
+	loadFromDisk();
+	const firstEmail = getFirstUserEmail();
+	if (!firstEmail) {
+		throw new Error('No credentials available — an admin user must log in first.');
+	}
+	return getUserClient(firstEmail, origin);
+}
+
+/** @deprecated Use isAnyUserAvailable instead */
+export function isRootAvailable(): boolean {
+	return isAnyUserAvailable();
 }

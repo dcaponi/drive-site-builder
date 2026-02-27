@@ -1,7 +1,7 @@
 import type { PageServerLoad, Actions } from './$types';
 import type { SessionUser } from '$lib/server/auth.js';
 import { getAuthedClient } from '$lib/server/auth.js';
-import { getRootClient, isRootAvailable } from '$lib/server/rootAuth.js';
+import { lookupApp, getUserClient, isAnyUserAvailable } from '$lib/server/rootAuth.js';
 import { getAppById } from '$lib/server/sheets.js';
 import { findAppUser, createAppUser } from '$lib/server/sheets.js';
 import { verifyAppToken, signAppToken, appCookieName, type AppRole } from '$lib/server/appAuth.js';
@@ -16,30 +16,33 @@ import { error, redirect, fail } from '@sveltejs/kit';
 
 const USER_COOKIE_MAX_AGE = 90 * 24 * 3600;
 
+function resolveAppAuth(user: SessionUser | null, reg: { ownerEmail: string; rootFolderId: string }, origin: string) {
+	const isOwner = user && user.email.toLowerCase() === reg.ownerEmail.toLowerCase();
+	const auth = isOwner
+		? getAuthedClient(user, origin)
+		: getUserClient(reg.ownerEmail, origin);
+	return { auth, isOwner, rootFolderId: reg.rootFolderId };
+}
+
 export const load: PageServerLoad = async ({ params, locals, url, cookies }) => {
 	const user = locals.user as SessionUser | null;
 
-	// Prefer the visitor's own Google credentials; fall back to cached root credentials
-	const auth = user
-		? getAuthedClient(user, url.origin)
-		: isRootAvailable()
-			? getRootClient(url.origin)
-			: null;
+	// Resolve via registry — never trust visiting user's rootFolderId
+	const reg = lookupApp(params.appId!);
+	if (!reg) throw error(503, 'App owner must log in first');
 
-	if (!auth) throw error(503, 'Service unavailable — admin must log in first');
+	const { auth, isOwner, rootFolderId } = resolveAppAuth(user, reg, url.origin);
 
-	const app = await getAppById(auth, params.appId!);
+	const app = await getAppById(auth, rootFolderId, params.appId!);
 	if (!app) throw error(404, 'App not found');
 
-	// Root user (Google OAuth) always has full access
-	if (user) {
+	// ISOLATION: Only grant 'root' role if visitor IS the app owner
+	if (user && isOwner) {
 		return { app, authed: true, role: 'root' as const, showUserAuth: false };
 	}
 
 	// ── Check for user-level auth (end-user sign-up/login) ──────────────────
-	// Only applies when allowed_domains is set (indicating app has a user system)
 	if (app.allowed_domains.length > 0 && app.app_password) {
-		// First check app-owner cookie (has priority)
 		const appCookieToken = cookies.get(appCookieName(app.id));
 		if (appCookieToken) {
 			const { valid, role } = await verifyAppToken(appCookieToken, app.id);
@@ -48,38 +51,28 @@ export const load: PageServerLoad = async ({ params, locals, url, cookies }) => 
 			}
 		}
 
-		// Check user cookie
 		const userToken = cookies.get(userCookieName(app.id));
 		if (userToken) {
 			const { valid, userId, email } = await verifyUserToken(userToken, app.id);
 			if (valid) {
 				const owners = (app.app_owners ?? []).map((e) => e.toLowerCase().trim());
 				const role: AppRole = owners.includes(email.toLowerCase()) ? 'app-owner' : 'public';
-				return {
-					app,
-					authed: true,
-					role,
-					showUserAuth: false,
-					userId,
-					email
-				};
+				return { app, authed: true, role, showUserAuth: false, userId, email };
 			}
 		}
 
-		// Not authed — show user sign-up/login
 		return { app, authed: false, role: 'public' as const, showUserAuth: true };
 	}
 
 	// ── Standard app-password auth ──────────────────────────────────────────
 	if (!app.app_password) {
-		// Public app — anyone can view (no chat bubble)
 		return { app, authed: true, role: 'public' as const, showUserAuth: false };
 	}
 
 	// Check for token in query param (magic link)
 	const tokenParam = url.searchParams.get('token');
 	if (tokenParam) {
-		const { valid, role } = await verifyAppToken(tokenParam, app.id);
+		const { valid } = await verifyAppToken(tokenParam, app.id);
 		if (valid) {
 			cookies.set(appCookieName(app.id), tokenParam, {
 				path: '/',
@@ -100,16 +93,16 @@ export const load: PageServerLoad = async ({ params, locals, url, cookies }) => 
 		}
 	}
 
-	// Not authed — show login form
 	return { app, authed: false, role: 'public' as const, showUserAuth: false };
 };
 
 export const actions: Actions = {
 	login: async ({ params, url, request, cookies }) => {
-		if (!isRootAvailable()) return fail(503, { error: 'Service unavailable' });
+		const reg = lookupApp(params.appId!);
+		if (!reg) return fail(503, { error: 'App owner must log in first' });
 
-		const auth = getRootClient(url.origin);
-		const app = await getAppById(auth, params.appId!);
+		const auth = getUserClient(reg.ownerEmail, url.origin);
+		const app = await getAppById(auth, reg.rootFolderId, params.appId!);
 		if (!app) return fail(404, { error: 'App not found' });
 
 		const data = await request.formData();
@@ -120,7 +113,6 @@ export const actions: Actions = {
 			return fail(401, { error: 'Invalid password' });
 		}
 
-		// Determine role: email in app_owners list → app-owner; otherwise public
 		const owners = (app.app_owners ?? []).map((e) => e.toLowerCase().trim());
 		const role: AppRole =
 			owners.length > 0 && owners.includes(email) ? 'app-owner' : 'public';
@@ -137,10 +129,11 @@ export const actions: Actions = {
 	},
 
 	signup: async ({ params, url, request, cookies }) => {
-		if (!isRootAvailable()) return fail(503, { error: 'Service unavailable' });
+		const reg = lookupApp(params.appId!);
+		if (!reg) return fail(503, { error: 'App owner must log in first' });
 
-		const auth = getRootClient(url.origin);
-		const app = await getAppById(auth, params.appId!);
+		const auth = getUserClient(reg.ownerEmail, url.origin);
+		const app = await getAppById(auth, reg.rootFolderId, params.appId!);
 		if (!app) return fail(404, { error: 'App not found' });
 
 		const data = await request.formData();
@@ -151,7 +144,6 @@ export const actions: Actions = {
 		if (!email || !password) return fail(400, { error: 'Email and password are required' });
 		if (password !== confirm) return fail(400, { error: 'Passwords do not match' });
 
-		// Validate domain
 		if (app.allowed_domains.length > 0) {
 			const domain = email.split('@')[1] ?? '';
 			if (!app.allowed_domains.includes(domain)) {
@@ -161,12 +153,11 @@ export const actions: Actions = {
 			}
 		}
 
-		// Check if already exists
-		const existing = await findAppUser(auth, params.appId!, email);
+		const existing = await findAppUser(auth, reg.rootFolderId, params.appId!, email);
 		if (existing) return fail(409, { error: 'An account with this email already exists' });
 
 		const passwordHash = hashPassword(password);
-		const userId = await createAppUser(auth, params.appId!, email, passwordHash);
+		const userId = await createAppUser(auth, reg.rootFolderId, params.appId!, email, passwordHash);
 		const token = await signUserToken(params.appId!, userId, email);
 
 		cookies.set(userCookieName(params.appId!), token, {
@@ -180,10 +171,11 @@ export const actions: Actions = {
 	},
 
 	userLogin: async ({ params, url, request, cookies }) => {
-		if (!isRootAvailable()) return fail(503, { error: 'Service unavailable' });
+		const reg = lookupApp(params.appId!);
+		if (!reg) return fail(503, { error: 'App owner must log in first' });
 
-		const auth = getRootClient(url.origin);
-		const app = await getAppById(auth, params.appId!);
+		const auth = getUserClient(reg.ownerEmail, url.origin);
+		const app = await getAppById(auth, reg.rootFolderId, params.appId!);
 		if (!app) return fail(404, { error: 'App not found' });
 
 		const data = await request.formData();
@@ -192,7 +184,7 @@ export const actions: Actions = {
 
 		if (!email || !password) return fail(400, { error: 'Email and password are required' });
 
-		const appUser = await findAppUser(auth, params.appId!, email);
+		const appUser = await findAppUser(auth, reg.rootFolderId, params.appId!, email);
 		if (!appUser || !verifyPassword(password, appUser.password_hash)) {
 			return fail(401, { error: 'Invalid email or password' });
 		}

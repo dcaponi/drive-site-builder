@@ -1,13 +1,13 @@
 import type { Handle } from '@sveltejs/kit';
 import { verifySessionToken, getTokenFromCookies } from '$lib/server/auth.js';
-import { setRootCredentials } from '$lib/server/rootAuth.js';
+import { setUserCredentials } from '$lib/server/rootAuth.js';
 
 export const handle: Handle = async ({ event, resolve }) => {
 	const token = getTokenFromCookies(event.request.headers.get('cookie'));
 	if (token) {
 		const user = await verifySessionToken(token);
 		event.locals.user = user;
-		if (user) setRootCredentials(user); // Cache for non-Google-authed requests
+		if (user) setUserCredentials(user); // Cache for non-Google-authed requests
 	} else {
 		event.locals.user = null;
 	}

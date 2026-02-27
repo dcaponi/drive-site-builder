@@ -7,6 +7,8 @@ import { json } from '@sveltejs/kit';
 export const DELETE: RequestHandler = async ({ params, locals, url }) => {
 	const user = locals.user as SessionUser;
 	const auth = getAuthedClient(user, url.origin);
-	const ok = await deleteConversationEntry(auth, params.feedbackId!);
+	const rootFolderId = user.root_folder_id!;
+
+	const ok = await deleteConversationEntry(auth, rootFolderId, params.feedbackId!);
 	return json({ ok });
 };

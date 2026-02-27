@@ -1,8 +1,8 @@
 import type { PageServerLoad, Actions } from './$types';
 import type { SessionUser } from '$lib/server/auth.js';
 import { getAuthedClient } from '$lib/server/auth.js';
-import { getRootClient, isRootAvailable } from '$lib/server/rootAuth.js';
-import { getAppBySlug } from '$lib/server/sheets.js';
+import { lookupApp, lookupSlug, getUserClient } from '$lib/server/rootAuth.js';
+import { getAppById, getAppBySlug } from '$lib/server/sheets.js';
 import { findAppUser, createAppUser } from '$lib/server/sheets.js';
 import { verifyAppToken, signAppToken, appCookieName, type AppRole } from '$lib/server/appAuth.js';
 import {
@@ -16,22 +16,32 @@ import { error, redirect, fail } from '@sveltejs/kit';
 
 const USER_COOKIE_MAX_AGE = 90 * 24 * 3600;
 
+/** Resolve the app's owner info via the slug registry, then the app registry. */
+function resolveReg(clientSlug: string, appSlug: string) {
+	const appId = lookupSlug(clientSlug, appSlug);
+	if (!appId) return null;
+	const reg = lookupApp(appId);
+	if (!reg) return null;
+	return { ...reg, appId };
+}
+
 export const load: PageServerLoad = async ({ params, locals, url, cookies }) => {
 	const user = locals.user as SessionUser | null;
 
-	const auth = user
+	const resolved = resolveReg(params.clientSlug, params.appSlug);
+	if (!resolved) throw error(503, 'App owner must log in first');
+
+	const isOwner = user && user.email.toLowerCase() === resolved.ownerEmail.toLowerCase();
+	const auth = isOwner
 		? getAuthedClient(user, url.origin)
-		: isRootAvailable()
-			? getRootClient(url.origin)
-			: null;
+		: getUserClient(resolved.ownerEmail, url.origin);
+	const rootFolderId = resolved.rootFolderId;
 
-	if (!auth) throw error(503, 'Service unavailable — admin must log in first');
-
-	const app = await getAppBySlug(auth, params.clientSlug, params.appSlug);
+	const app = await getAppBySlug(auth, rootFolderId, params.clientSlug, params.appSlug);
 	if (!app) throw error(404, 'App not found');
 
-	// Root user (Google OAuth) always has full access
-	if (user) {
+	// ISOLATION: Only grant 'root' role if visitor IS the app owner
+	if (user && isOwner) {
 		return { app, authed: true, role: 'root' as const, showUserAuth: false };
 	}
 
@@ -92,10 +102,11 @@ export const load: PageServerLoad = async ({ params, locals, url, cookies }) => 
 
 export const actions: Actions = {
 	login: async ({ params, url, request, cookies }) => {
-		if (!isRootAvailable()) return fail(503, { error: 'Service unavailable' });
+		const resolved = resolveReg(params.clientSlug, params.appSlug);
+		if (!resolved) return fail(503, { error: 'App owner must log in first' });
 
-		const auth = getRootClient(url.origin);
-		const app = await getAppBySlug(auth, params.clientSlug, params.appSlug);
+		const auth = getUserClient(resolved.ownerEmail, url.origin);
+		const app = await getAppBySlug(auth, resolved.rootFolderId, params.clientSlug, params.appSlug);
 		if (!app) return fail(404, { error: 'App not found' });
 
 		const data = await request.formData();
@@ -122,10 +133,11 @@ export const actions: Actions = {
 	},
 
 	signup: async ({ params, url, request, cookies }) => {
-		if (!isRootAvailable()) return fail(503, { error: 'Service unavailable' });
+		const resolved = resolveReg(params.clientSlug, params.appSlug);
+		if (!resolved) return fail(503, { error: 'App owner must log in first' });
 
-		const auth = getRootClient(url.origin);
-		const app = await getAppBySlug(auth, params.clientSlug, params.appSlug);
+		const auth = getUserClient(resolved.ownerEmail, url.origin);
+		const app = await getAppBySlug(auth, resolved.rootFolderId, params.clientSlug, params.appSlug);
 		if (!app) return fail(404, { error: 'App not found' });
 
 		const data = await request.formData();
@@ -145,11 +157,11 @@ export const actions: Actions = {
 			}
 		}
 
-		const existing = await findAppUser(auth, app.id, email);
+		const existing = await findAppUser(auth, resolved.rootFolderId, app.id, email);
 		if (existing) return fail(409, { error: 'An account with this email already exists' });
 
 		const passwordHash = hashPassword(password);
-		const userId = await createAppUser(auth, app.id, email, passwordHash);
+		const userId = await createAppUser(auth, resolved.rootFolderId, app.id, email, passwordHash);
 		const token = await signUserToken(app.id, userId, email);
 
 		cookies.set(userCookieName(app.id), token, {
@@ -163,10 +175,11 @@ export const actions: Actions = {
 	},
 
 	userLogin: async ({ params, url, request, cookies }) => {
-		if (!isRootAvailable()) return fail(503, { error: 'Service unavailable' });
+		const resolved = resolveReg(params.clientSlug, params.appSlug);
+		if (!resolved) return fail(503, { error: 'App owner must log in first' });
 
-		const auth = getRootClient(url.origin);
-		const app = await getAppBySlug(auth, params.clientSlug, params.appSlug);
+		const auth = getUserClient(resolved.ownerEmail, url.origin);
+		const app = await getAppBySlug(auth, resolved.rootFolderId, params.clientSlug, params.appSlug);
 		if (!app) return fail(404, { error: 'App not found' });
 
 		const data = await request.formData();
@@ -175,7 +188,7 @@ export const actions: Actions = {
 
 		if (!email || !password) return fail(400, { error: 'Email and password are required' });
 
-		const appUser = await findAppUser(auth, app.id, email);
+		const appUser = await findAppUser(auth, resolved.rootFolderId, app.id, email);
 		if (!appUser || !verifyPassword(password, appUser.password_hash)) {
 			return fail(401, { error: 'Invalid email or password' });
 		}
@@ -191,15 +204,14 @@ export const actions: Actions = {
 		throw redirect(302, `/${params.clientSlug}/${params.appSlug}`);
 	},
 
-	userLogout: async ({ params, cookies }) => {
-		const app_id_lookup = `${params.clientSlug}_${params.appSlug}`;
-		// We need to find the app to get its ID for the cookie name
-		if (!isRootAvailable()) throw redirect(302, `/${params.clientSlug}/${params.appSlug}`);
-
-		const auth = getRootClient('');
-		const app = await getAppBySlug(auth, params.clientSlug, params.appSlug);
-		if (app) {
-			cookies.delete(userCookieName(app.id), { path: '/' });
+	userLogout: async ({ params, url, cookies }) => {
+		const resolved = resolveReg(params.clientSlug, params.appSlug);
+		if (resolved) {
+			const auth = getUserClient(resolved.ownerEmail, url.origin);
+			const app = await getAppBySlug(auth, resolved.rootFolderId, params.clientSlug, params.appSlug);
+			if (app) {
+				cookies.delete(userCookieName(app.id), { path: '/' });
+			}
 		}
 		throw redirect(302, `/${params.clientSlug}/${params.appSlug}`);
 	}

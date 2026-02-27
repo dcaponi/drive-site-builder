@@ -1,5 +1,7 @@
 import type { RequestHandler } from '@sveltejs/kit';
-import { getRootClient, isRootAvailable } from '$lib/server/rootAuth.js';
+import type { SessionUser } from '$lib/server/auth.js';
+import { getAuthedClient } from '$lib/server/auth.js';
+import { lookupApp, getUserClient } from '$lib/server/rootAuth.js';
 import { getAppById } from '$lib/server/sheets.js';
 import { findAppUser, createAppUser } from '$lib/server/sheets.js';
 import {
@@ -23,11 +25,16 @@ function cookieOpts(appId: string) {
 }
 
 export const POST: RequestHandler = async ({ params, request, url, cookies }) => {
-	if (!isRootAvailable()) return json({ error: 'Service unavailable' }, { status: 503 });
-	const auth = getRootClient(url.origin);
 	const appId = params.appId!;
 
-	const app = await getAppById(auth, appId);
+	// Resolve via registry
+	const reg = lookupApp(appId);
+	if (!reg) return json({ error: 'App owner must log in first' }, { status: 503 });
+
+	const auth = getUserClient(reg.ownerEmail, url.origin);
+	const rootFolderId = reg.rootFolderId;
+
+	const app = await getAppById(auth, rootFolderId, appId);
 	if (!app) return json({ error: 'App not found' }, { status: 404 });
 
 	const body = await request.json().catch(() => ({})) as Record<string, unknown>;
@@ -54,13 +61,13 @@ export const POST: RequestHandler = async ({ params, request, url, cookies }) =>
 		}
 
 		// Check if user already exists
-		const existing = await findAppUser(auth, appId, email);
+		const existing = await findAppUser(auth, rootFolderId, appId, email);
 		if (existing) {
 			return json({ error: 'An account with this email already exists' }, { status: 409 });
 		}
 
 		const passwordHash = hashPassword(password);
-		const userId = await createAppUser(auth, appId, email, passwordHash);
+		const userId = await createAppUser(auth, rootFolderId, appId, email, passwordHash);
 		const token = await signUserToken(appId, userId, email);
 
 		cookies.set(userCookieName(appId), token, cookieOpts(appId));
@@ -76,14 +83,14 @@ export const POST: RequestHandler = async ({ params, request, url, cookies }) =>
 			return json({ error: 'Email and password are required' }, { status: 400 });
 		}
 
-		const user = await findAppUser(auth, appId, email);
-		if (!user || !verifyPassword(password, user.password_hash)) {
+		const appUser = await findAppUser(auth, rootFolderId, appId, email);
+		if (!appUser || !verifyPassword(password, appUser.password_hash)) {
 			return json({ error: 'Invalid email or password' }, { status: 401 });
 		}
 
-		const token = await signUserToken(appId, user.id, user.email);
+		const token = await signUserToken(appId, appUser.id, appUser.email);
 		cookies.set(userCookieName(appId), token, cookieOpts(appId));
-		return json({ userId: user.id, email: user.email });
+		return json({ userId: appUser.id, email: appUser.email });
 	}
 
 	return json({ error: 'Invalid action. Use action: signup or login' }, { status: 400 });

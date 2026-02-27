@@ -9,6 +9,7 @@ export interface SessionUser {
 	access_token: string;
 	refresh_token: string;
 	expiry_date: number;
+	root_folder_id?: string;
 }
 
 const COOKIE_NAME = 'session';

@@ -2,13 +2,6 @@ import type { OAuth2Client } from 'google-auth-library';
 import { getSheets } from './google.js';
 import type { AppConfig, TableSchema, ColumnDef, CrudRecord, Conversation } from '../types.js';
 import { v4 as uuidv4 } from 'uuid';
-import { env } from '$env/dynamic/private';
-
-function rootFolderId(): string {
-	const id = (env.DRIVE_ROOT_FOLDER_ID ?? '').trim();
-	if (!id) throw new Error('DRIVE_ROOT_FOLDER_ID env var is not set');
-	return id;
-}
 
 const DRIVE_PARAMS = {
 	supportsAllDrives: true,
@@ -21,29 +14,34 @@ const DRIVE_PARAMS = {
 const CONFIG_SHEET_NAME = '_config';
 const CONVERSATIONS_SHEET_NAME = '_conversations';
 
-let _configSheetId: string | null = null;
-let _conversationsSheetId: string | null = null;
+// Keyed by rootFolderId to prevent cross-tenant cache poisoning
+const _configSheetIds = new Map<string, string>();
+const _conversationsSheetIds = new Map<string, string>();
 
 async function findOrCreateSheet(
 	auth: OAuth2Client,
+	rootFolderId: string,
 	name: string,
-	cachedId: string | null
+	cache: Map<string, string>
 ): Promise<string> {
-	if (cachedId) return cachedId;
+	const cached = cache.get(rootFolderId);
+	if (cached) return cached;
 
 	const { google } = await import('googleapis');
 	const drive = google.drive({ version: 'v3', auth });
 
 	// Try to find existing
 	const res = await drive.files.list({
-		q: `name = '${name}' and '${rootFolderId()}' in parents and mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false`,
+		q: `name = '${name}' and '${rootFolderId}' in parents and mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false`,
 		fields: 'files(id)',
 		pageSize: 1,
 		...DRIVE_PARAMS
 	});
 
 	if (res.data.files?.length) {
-		return res.data.files[0].id!;
+		const id = res.data.files[0].id!;
+		cache.set(rootFolderId, id);
+		return id;
 	}
 
 	// Create new spreadsheet in root folder
@@ -51,26 +49,22 @@ async function findOrCreateSheet(
 		requestBody: {
 			name,
 			mimeType: 'application/vnd.google-apps.spreadsheet',
-			parents: [rootFolderId()]
+			parents: [rootFolderId]
 		},
 		fields: 'id',
 		...DRIVE_PARAMS
 	});
-	return created.data.id!;
+	const id = created.data.id!;
+	cache.set(rootFolderId, id);
+	return id;
 }
 
-async function getConfigSheetId(auth: OAuth2Client): Promise<string> {
-	_configSheetId = await findOrCreateSheet(auth, CONFIG_SHEET_NAME, _configSheetId);
-	return _configSheetId;
+async function getConfigSheetId(auth: OAuth2Client, rootFolderId: string): Promise<string> {
+	return findOrCreateSheet(auth, rootFolderId, CONFIG_SHEET_NAME, _configSheetIds);
 }
 
-async function getConversationsSheetId(auth: OAuth2Client): Promise<string> {
-	_conversationsSheetId = await findOrCreateSheet(
-		auth,
-		CONVERSATIONS_SHEET_NAME,
-		_conversationsSheetId
-	);
-	return _conversationsSheetId;
+async function getConversationsSheetId(auth: OAuth2Client, rootFolderId: string): Promise<string> {
+	return findOrCreateSheet(auth, rootFolderId, CONVERSATIONS_SHEET_NAME, _conversationsSheetIds);
 }
 
 // Ensure a named tab exists in a spreadsheet.
@@ -139,8 +133,8 @@ function serializeConfigValue(key: string, value: unknown): string {
 	return String(value ?? '');
 }
 
-export async function getConfigSheet(auth: OAuth2Client): Promise<AppConfig[]> {
-	const sheetId = await getConfigSheetId(auth);
+export async function getConfigSheet(auth: OAuth2Client, rootFolderId: string): Promise<AppConfig[]> {
+	const sheetId = await getConfigSheetId(auth, rootFolderId);
 	await ensureSheetTab(auth, sheetId, 'apps');
 	const sheets = getSheets(auth);
 
@@ -193,13 +187,13 @@ export async function getConfigSheet(auth: OAuth2Client): Promise<AppConfig[]> {
 		}));
 }
 
-export async function getAppById(auth: OAuth2Client, appId: string): Promise<AppConfig | null> {
-	const apps = await getConfigSheet(auth);
+export async function getAppById(auth: OAuth2Client, rootFolderId: string, appId: string): Promise<AppConfig | null> {
+	const apps = await getConfigSheet(auth, rootFolderId);
 	return apps.find((a) => a.id === appId) ?? null;
 }
 
-export async function addAppToConfig(auth: OAuth2Client, app: AppConfig): Promise<void> {
-	const sheetId = await getConfigSheetId(auth);
+export async function addAppToConfig(auth: OAuth2Client, rootFolderId: string, app: AppConfig): Promise<void> {
+	const sheetId = await getConfigSheetId(auth, rootFolderId);
 	const sheets = getSheets(auth);
 	const row = APP_HEADERS.map((h) => serializeConfigValue(h, app[h as keyof AppConfig]));
 
@@ -213,10 +207,11 @@ export async function addAppToConfig(auth: OAuth2Client, app: AppConfig): Promis
 
 export async function updateAppInConfig(
 	auth: OAuth2Client,
+	rootFolderId: string,
 	appId: string,
 	updates: Partial<AppConfig>
 ): Promise<void> {
-	const sheetId = await getConfigSheetId(auth);
+	const sheetId = await getConfigSheetId(auth, rootFolderId);
 	const sheets = getSheets(auth);
 
 	const res = await sheets.spreadsheets.values.get({
@@ -253,31 +248,33 @@ export async function updateAppInConfig(
 
 export async function addAppSpend(
 	auth: OAuth2Client,
+	rootFolderId: string,
 	appId: string,
 	amountUsd: number
 ): Promise<void> {
 	if (amountUsd <= 0) return;
-	const app = await getAppById(auth, appId);
+	const app = await getAppById(auth, rootFolderId, appId);
 	if (!app) return;
-	await updateAppInConfig(auth, appId, { spend_usd: (app.spend_usd || 0) + amountUsd });
+	await updateAppInConfig(auth, rootFolderId, appId, { spend_usd: (app.spend_usd || 0) + amountUsd });
 }
 
 export async function getAppBySlug(
 	auth: OAuth2Client,
+	rootFolderId: string,
 	clientSlug: string,
 	appSlug: string
 ): Promise<AppConfig | null> {
-	const apps = await getConfigSheet(auth);
+	const apps = await getConfigSheet(auth, rootFolderId);
 	return apps.find((a) => a.client_slug === clientSlug && a.app_slug === appSlug) ?? null;
 }
 
-export async function getHomeApp(auth: OAuth2Client): Promise<AppConfig | null> {
-	const apps = await getConfigSheet(auth);
+export async function getHomeApp(auth: OAuth2Client, rootFolderId: string): Promise<AppConfig | null> {
+	const apps = await getConfigSheet(auth, rootFolderId);
 	return apps.find((a) => a.is_home) ?? null;
 }
 
-export async function setHomeApp(auth: OAuth2Client, appId: string): Promise<void> {
-	const sheetId = await getConfigSheetId(auth);
+export async function setHomeApp(auth: OAuth2Client, rootFolderId: string, appId: string): Promise<void> {
+	const sheetId = await getConfigSheetId(auth, rootFolderId);
 	const sheets = getSheets(auth);
 
 	const res = await sheets.spreadsheets.values.get({
@@ -353,9 +350,10 @@ const CONV_HEADERS = ['id', 'app_id', 'role', 'message', 'summary', 'created_at'
 
 export async function appendConversation(
 	auth: OAuth2Client,
+	rootFolderId: string,
 	entry: Omit<Conversation, 'id'>
 ): Promise<void> {
-	const sheetId = await getConversationsSheetId(auth);
+	const sheetId = await getConversationsSheetId(auth, rootFolderId);
 	await ensureSheetTab(auth, sheetId, 'conversations');
 	const sheets = getSheets(auth);
 
@@ -386,10 +384,11 @@ export async function appendConversation(
 
 export async function getConversationSummaries(
 	auth: OAuth2Client,
+	rootFolderId: string,
 	appId?: string
 ): Promise<string[]> {
 	try {
-		const sheetId = await getConversationsSheetId(auth);
+		const sheetId = await getConversationsSheetId(auth, rootFolderId);
 		await ensureSheetTab(auth, sheetId, 'conversations');
 		const sheets = getSheets(auth);
 
@@ -416,10 +415,11 @@ export interface ConversationFeedback {
 
 export async function getAppFeedbacks(
 	auth: OAuth2Client,
+	rootFolderId: string,
 	appId: string
 ): Promise<ConversationFeedback[]> {
 	try {
-		const sheetId = await getConversationsSheetId(auth);
+		const sheetId = await getConversationsSheetId(auth, rootFolderId);
 		await ensureSheetTab(auth, sheetId, 'conversations');
 		const sheets = getSheets(auth);
 
@@ -444,10 +444,11 @@ export async function getAppFeedbacks(
 
 export async function deleteConversationEntry(
 	auth: OAuth2Client,
+	rootFolderId: string,
 	entryId: string
 ): Promise<boolean> {
 	try {
-		const sheetId = await getConversationsSheetId(auth);
+		const sheetId = await getConversationsSheetId(auth, rootFolderId);
 		const sheets = getSheets(auth);
 
 		// Find the sheet tab's numeric ID
@@ -521,10 +522,11 @@ async function ensureUsersTab(auth: OAuth2Client, spreadsheetId: string): Promis
 
 export async function findAppUser(
 	auth: OAuth2Client,
+	rootFolderId: string,
 	appId: string,
 	email: string
 ): Promise<AppUser | null> {
-	const app = await getAppById(auth, appId);
+	const app = await getAppById(auth, rootFolderId, appId);
 	if (!app?.database_sheet_id) return null;
 
 	const spreadsheetId = app.database_sheet_id;
@@ -551,11 +553,12 @@ export async function findAppUser(
 
 export async function createAppUser(
 	auth: OAuth2Client,
+	rootFolderId: string,
 	appId: string,
 	email: string,
 	passwordHash: string
 ): Promise<string> {
-	const app = await getAppById(auth, appId);
+	const app = await getAppById(auth, rootFolderId, appId);
 	if (!app?.database_sheet_id) throw new Error('App has no database sheet');
 
 	const spreadsheetId = app.database_sheet_id;

@@ -10,10 +10,50 @@ const DRIVE_PARAMS = {
 	includeItemsFromAllDrives: true
 } as const;
 
-function getRootFolderId(): string {
-	const id = (env.DRIVE_ROOT_FOLDER_ID ?? '').trim();
-	if (!id) throw new Error('DRIVE_ROOT_FOLDER_ID env var is not set');
-	return id;
+const ROOT_FOLDER_NAME = 'drive-app-builder';
+
+// ─── User root folder provisioning ───────────────────────────────────────────
+
+/**
+ * Ensure the user has a root folder for their apps.
+ * - If email matches the primary owner (first in ALLOWED_EMAILS), return DRIVE_ROOT_FOLDER_ID.
+ * - Otherwise, search for a "drive-app-builder" folder in their Drive root; create if not found.
+ */
+export async function ensureUserRootFolder(
+	auth: OAuth2Client,
+	email: string
+): Promise<string> {
+	// Check if this user is the primary owner
+	const raw = env.ALLOWED_EMAILS ?? env.ALLOWED_EMAIL ?? '';
+	const allowedEmails = raw.split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+	const primaryEmail = allowedEmails[0] ?? '';
+
+	if (primaryEmail && email.toLowerCase() === primaryEmail) {
+		const envId = (env.DRIVE_ROOT_FOLDER_ID ?? '').trim();
+		if (envId) return envId;
+	}
+
+	// Search user's Drive for the root folder
+	const drive = getDrive(auth);
+	const res = await drive.files.list({
+		q: `name = '${ROOT_FOLDER_NAME}' and 'root' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+		fields: 'files(id,name)',
+		pageSize: 1
+	});
+
+	if (res.data.files?.length) {
+		return res.data.files[0].id!;
+	}
+
+	// Create the root folder
+	const created = await drive.files.create({
+		requestBody: {
+			name: ROOT_FOLDER_NAME,
+			mimeType: 'application/vnd.google-apps.folder'
+		},
+		fields: 'id'
+	});
+	return created.data.id!;
 }
 
 // ─── Slug helpers ─────────────────────────────────────────────────────────────
@@ -29,14 +69,14 @@ export function toSlug(name: string): string {
 
 export async function findOrCreateClientFolder(
 	auth: OAuth2Client,
+	rootFolderId: string,
 	clientSlug: string
 ): Promise<string> {
-	const rootId = getRootFolderId();
 	const drive = getDrive(auth);
 
 	// List top-level folders
 	const res = await drive.files.list({
-		q: `'${rootId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+		q: `'${rootFolderId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
 		fields: 'files(id,name)',
 		...DRIVE_PARAMS
 	});
@@ -50,7 +90,7 @@ export async function findOrCreateClientFolder(
 		requestBody: {
 			name: clientSlug,
 			mimeType: 'application/vnd.google-apps.folder',
-			parents: [rootId]
+			parents: [rootFolderId]
 		},
 		fields: 'id',
 		...DRIVE_PARAMS
@@ -61,9 +101,9 @@ export async function findOrCreateClientFolder(
 // ─── Root folder verification ─────────────────────────────────────────────────
 
 export async function verifyRootFolder(
-	auth: OAuth2Client
+	auth: OAuth2Client,
+	rootFolderId: string
 ): Promise<{ id: string; name: string }> {
-	const rootFolderId = getRootFolderId();
 	const drive = getDrive(auth);
 	try {
 		const res = await drive.files.get({
@@ -76,7 +116,7 @@ export async function verifyRootFolder(
 		const msg = err instanceof Error ? err.message : String(err);
 		throw new Error(
 			`Cannot access Drive folder "${rootFolderId}": ${msg}. ` +
-				'Check that DRIVE_ROOT_FOLDER_ID is the folder ID (not the full URL) and your account has access.'
+				'Check that the folder ID is correct and your account has access.'
 		);
 	}
 }
@@ -84,9 +124,9 @@ export async function verifyRootFolder(
 // ─── List folders inside root ─────────────────────────────────────────────────
 
 export async function listAppFolders(
-	auth: OAuth2Client
+	auth: OAuth2Client,
+	rootFolderId: string
 ): Promise<Array<{ id: string; name: string }>> {
-	const rootFolderId = getRootFolderId();
 	const drive = getDrive(auth);
 	const res = await drive.files.list({
 		q: `'${rootFolderId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
@@ -130,6 +170,7 @@ export async function scanAppFolder(auth: OAuth2Client, folderId: string): Promi
 
 export async function registerApp(
 	auth: OAuth2Client,
+	rootFolderId: string,
 	folderId: string,
 	folderName: string,
 	clientSlug?: string,
@@ -162,7 +203,7 @@ export async function registerApp(
 		is_home: false
 	};
 
-	await addAppToConfig(auth, app);
+	await addAppToConfig(auth, rootFolderId, app);
 	return app;
 }
 
@@ -185,6 +226,7 @@ export async function readRequirementsDoc(auth: OAuth2Client, docId: string): Pr
 
 export async function writeGeneratedCode(
 	auth: OAuth2Client,
+	rootFolderId: string,
 	appId: string,
 	appName: string,
 	code: string,
@@ -214,7 +256,7 @@ export async function writeGeneratedCode(
 					media: { mimeType: 'text/plain', body: code },
 					...DRIVE_PARAMS
 				});
-				await updateAppInConfig(auth, appId, {
+				await updateAppInConfig(auth, rootFolderId, appId, {
 					last_built_at: new Date().toISOString(),
 					updated_at: new Date().toISOString()
 				});
@@ -237,7 +279,7 @@ export async function writeGeneratedCode(
 	});
 	const docId = created.data.id!;
 
-	await updateAppInConfig(auth, appId, {
+	await updateAppInConfig(auth, rootFolderId, appId, {
 		generated_code_doc_id: docId,
 		last_built_at: new Date().toISOString(),
 		updated_at: new Date().toISOString()
@@ -294,6 +336,7 @@ Describe the tables and data this app will manage.
 
 export async function createAppScaffold(
 	auth: OAuth2Client,
+	rootFolderId: string,
 	name: string,
 	clientSlug?: string
 ): Promise<AppConfig> {
@@ -303,9 +346,9 @@ export async function createAppScaffold(
 	// Determine parent folder
 	let parentId: string;
 	if (clientSlug) {
-		parentId = await findOrCreateClientFolder(auth, clientSlug);
+		parentId = await findOrCreateClientFolder(auth, rootFolderId, clientSlug);
 	} else {
-		parentId = getRootFolderId();
+		parentId = rootFolderId;
 	}
 
 	// 1. Create folder
@@ -347,7 +390,7 @@ export async function createAppScaffold(
 	});
 
 	// 4. Register and return AppConfig
-	return registerApp(auth, folderId, name, clientSlug ?? '', toSlug(name));
+	return registerApp(auth, rootFolderId, folderId, name, clientSlug ?? '', toSlug(name));
 }
 
 // ─── Append changelog entry to requirements doc ───────────────────────────────

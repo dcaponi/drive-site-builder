@@ -5,16 +5,16 @@ import type { CrudRecord } from '../types.js';
 import { v4 as uuidv4 } from 'uuid';
 
 // Resolve the spreadsheet ID for an app
-async function getDbSheetId(auth: OAuth2Client, appId: string): Promise<string> {
-	const app = await getAppById(auth, appId);
+async function getDbSheetId(auth: OAuth2Client, rootFolderId: string, appId: string): Promise<string> {
+	const app = await getAppById(auth, rootFolderId, appId);
 	if (!app) throw new Error(`App ${appId} not found`);
 	if (!app.database_sheet_id) throw new Error(`App ${appId} has no database sheet`);
 	return app.database_sheet_id;
 }
 
 // Get all sheet (table) names for an app
-export async function listTables(auth: OAuth2Client, appId: string): Promise<string[]> {
-	const spreadsheetId = await getDbSheetId(auth, appId);
+export async function listTables(auth: OAuth2Client, rootFolderId: string, appId: string): Promise<string[]> {
+	const spreadsheetId = await getDbSheetId(auth, rootFolderId, appId);
 	const sheets = getSheets(auth);
 	const meta = await sheets.spreadsheets.get({ spreadsheetId });
 	return (meta.data.sheets ?? [])
@@ -25,11 +25,12 @@ export async function listTables(auth: OAuth2Client, appId: string): Promise<str
 // Read all records from a table
 export async function listRecords(
 	auth: OAuth2Client,
+	rootFolderId: string,
 	appId: string,
 	table: string,
 	userId?: string
 ): Promise<CrudRecord[]> {
-	const spreadsheetId = await getDbSheetId(auth, appId);
+	const spreadsheetId = await getDbSheetId(auth, rootFolderId, appId);
 	const sheets = getSheets(auth);
 
 	const res = await sheets.spreadsheets.values.get({
@@ -64,23 +65,25 @@ export async function listRecords(
 // Read a single record by id
 export async function getRecord(
 	auth: OAuth2Client,
+	rootFolderId: string,
 	appId: string,
 	table: string,
 	id: string
 ): Promise<CrudRecord | null> {
-	const records = await listRecords(auth, appId, table);
+	const records = await listRecords(auth, rootFolderId, appId, table);
 	return records.find((r) => r.id === id) ?? null;
 }
 
 // Create a new record
 export async function createRecord(
 	auth: OAuth2Client,
+	rootFolderId: string,
 	appId: string,
 	table: string,
 	data: Record<string, unknown>,
 	userId?: string
 ): Promise<CrudRecord> {
-	const spreadsheetId = await getDbSheetId(auth, appId);
+	const spreadsheetId = await getDbSheetId(auth, rootFolderId, appId);
 	const sheets = getSheets(auth);
 
 	// Get headers from row 1
@@ -141,13 +144,14 @@ export async function createRecord(
 // Update a record by id (partial update)
 export async function updateRecord(
 	auth: OAuth2Client,
+	rootFolderId: string,
 	appId: string,
 	table: string,
 	id: string,
 	data: Record<string, unknown>,
 	userId?: string
 ): Promise<CrudRecord | null> {
-	const spreadsheetId = await getDbSheetId(auth, appId);
+	const spreadsheetId = await getDbSheetId(auth, rootFolderId, appId);
 	const sheets = getSheets(auth);
 
 	const res = await sheets.spreadsheets.values.get({
@@ -194,12 +198,13 @@ export async function updateRecord(
 // Delete a record by id (clears the row)
 export async function deleteRecord(
 	auth: OAuth2Client,
+	rootFolderId: string,
 	appId: string,
 	table: string,
 	id: string,
 	userId?: string
 ): Promise<boolean> {
-	const spreadsheetId = await getDbSheetId(auth, appId);
+	const spreadsheetId = await getDbSheetId(auth, rootFolderId, appId);
 	const sheets = getSheets(auth);
 
 	const res = await sheets.spreadsheets.values.get({

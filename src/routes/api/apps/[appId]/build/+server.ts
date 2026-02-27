@@ -10,14 +10,15 @@ export const POST: RequestHandler = async ({ params, locals, url }) => {
 	const user = locals.user as SessionUser;
 	const appId = params.appId!;
 	const auth = getAuthedClient(user, url.origin);
+	const rootFolderId = user.root_folder_id!;
 
-	const app = await getAppById(auth, appId);
+	const app = await getAppById(auth, rootFolderId, appId);
 	if (!app) throw error(404, 'App not found');
 
 	const [requirements, schema, uxSummaries, existingCode] = await Promise.all([
 		readRequirementsDoc(auth, app.requirements_doc_id),
 		getAppSchema(auth, app.database_sheet_id),
-		getConversationSummaries(auth, appId),
+		getConversationSummaries(auth, rootFolderId, appId),
 		app.generated_code_doc_id ? readGeneratedCode(auth, app.generated_code_doc_id) : Promise.resolve('')
 	]);
 
@@ -42,7 +43,7 @@ export const POST: RequestHandler = async ({ params, locals, url }) => {
 					}
 
 					await writeGeneratedCode(
-						auth, appId, app.name,
+						auth, rootFolderId, appId, app.name,
 						partialCode + '\n' + continuation,
 						app.folder_id, app.generated_code_doc_id || undefined
 					);
@@ -55,12 +56,12 @@ export const POST: RequestHandler = async ({ params, locals, url }) => {
 					}
 
 					await writeGeneratedCode(
-						auth, appId, app.name, fullCode,
+						auth, rootFolderId, appId, app.name, fullCode,
 						app.folder_id, app.generated_code_doc_id || undefined
 					);
 				}
 
-				if (totalCost > 0) addAppSpend(auth, appId, totalCost).catch(() => {});
+				if (totalCost > 0) addAppSpend(auth, rootFolderId, appId, totalCost).catch(() => {});
 
 				controller.close();
 			} catch (err) {
