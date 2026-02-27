@@ -60,9 +60,10 @@ export async function exchangeCode(
 	const oauth2 = google.oauth2({ version: 'v2', auth: client });
 	const { data: profile } = await oauth2.userinfo.get();
 
-	const allowedEmail = env.ALLOWED_EMAIL;
-	if (allowedEmail && profile.email !== allowedEmail) {
-		throw new Error(`Access restricted. Only ${allowedEmail} is allowed.`);
+	const raw = env.ALLOWED_EMAILS ?? env.ALLOWED_EMAIL ?? '';
+	const allowedEmails = raw.split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+	if (allowedEmails.length > 0 && !allowedEmails.includes(profile.email!.toLowerCase())) {
+		throw new Error('Access restricted to whitelisted accounts.');
 	}
 
 	return {
