@@ -4,7 +4,8 @@ import { getAuthedClient } from '$lib/server/auth.js';
 import { getAppById, getAppSchema, getConversationSummaries, addAppSpend } from '$lib/server/sheets.js';
 import { readRequirementsDoc, readGeneratedCode, writeGeneratedCode } from '$lib/server/drive.js';
 import { generateApp, continueApp, isTruncated, stripTruncationMarker } from '$lib/server/anthropic.js';
-import { error } from '@sveltejs/kit';
+import { error, json } from '@sveltejs/kit';
+import { createJob, updateJob } from '$lib/server/jobQueue.js';
 
 export const POST: RequestHandler = async ({ params, locals, url }) => {
 	const user = locals.user as SessionUser;
@@ -24,56 +25,55 @@ export const POST: RequestHandler = async ({ params, locals, url }) => {
 
 	const shouldContinue = isTruncated(existingCode);
 
-	const stream = new ReadableStream({
-		async start(controller) {
-			const enc = new TextEncoder();
-			let totalCost = 0;
-			const trackCost = (c: number) => { totalCost += c; };
+	const jobId = createJob();
 
-			try {
-				if (shouldContinue) {
-					const partialCode = stripTruncationMarker(existingCode);
-					let continuation = '';
+	(async () => {
+		let totalCost = 0;
+		const trackCost = (c: number) => { totalCost += c; };
 
-					controller.enqueue(enc.encode('<!-- Continuing from previous output… -->\n'));
+		try {
+			if (shouldContinue) {
+				const partialCode = stripTruncationMarker(existingCode);
+				let continuation = '';
 
-					for await (const chunk of continueApp(partialCode, requirements, schema, url.origin, appId, uxSummaries, trackCost)) {
-						continuation += chunk;
-						controller.enqueue(enc.encode(chunk));
-					}
+				updateJob(jobId, { status: 'running', progress: 'Continuing previous build…' });
 
-					await writeGeneratedCode(
-						auth, rootFolderId, appId, app.name,
-						partialCode + '\n' + continuation,
-						app.folder_id, app.generated_code_doc_id || undefined
-					);
-				} else {
-					let fullCode = '';
-
-					for await (const chunk of generateApp(requirements, schema, url.origin, appId, uxSummaries, trackCost)) {
-						fullCode += chunk;
-						controller.enqueue(enc.encode(chunk));
-					}
-
-					await writeGeneratedCode(
-						auth, rootFolderId, appId, app.name, fullCode,
-						app.folder_id, app.generated_code_doc_id || undefined
-					);
+				for await (const chunk of continueApp(partialCode, requirements, schema, url.origin, appId, uxSummaries, trackCost)) {
+					continuation += chunk;
 				}
 
-				if (totalCost > 0) addAppSpend(auth, rootFolderId, appId, totalCost).catch(() => {});
+				updateJob(jobId, { status: 'running', progress: 'Saving to Drive…' });
 
-				controller.close();
-			} catch (err) {
-				controller.error(err instanceof Error ? err.message : 'Build failed');
+				await writeGeneratedCode(
+					auth, rootFolderId, appId, app.name,
+					partialCode + '\n' + continuation,
+					app.folder_id, app.generated_code_doc_id || undefined
+				);
+			} else {
+				let fullCode = '';
+
+				updateJob(jobId, { status: 'running', progress: 'Generating code…' });
+
+				for await (const chunk of generateApp(requirements, schema, url.origin, appId, uxSummaries, trackCost)) {
+					fullCode += chunk;
+				}
+
+				updateJob(jobId, { status: 'running', progress: 'Saving to Drive…' });
+
+				await writeGeneratedCode(
+					auth, rootFolderId, appId, app.name, fullCode,
+					app.folder_id, app.generated_code_doc_id || undefined
+				);
 			}
-		}
-	});
 
-	return new Response(stream, {
-		headers: {
-			'Content-Type': 'text/plain; charset=utf-8',
-			'Cache-Control': 'no-cache'
+			if (totalCost > 0) addAppSpend(auth, rootFolderId, appId, totalCost).catch(() => {});
+
+			updateJob(jobId, { status: 'done', progress: 'Done' });
+		} catch (err) {
+			const message = err instanceof Error ? err.message : 'Build failed';
+			updateJob(jobId, { status: 'error', progress: 'Build failed', error: message });
 		}
-	});
+	})();
+
+	return json({ jobId }, { status: 202 });
 };

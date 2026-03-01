@@ -12,9 +12,8 @@
 	}
 
 	let building = $state(false);
-	let buildLog = $state('');
+	let buildProgress = $state('');
 	let buildError = $state('');
-	let logDiv: HTMLDivElement | undefined = $state();
 	let feedbacks = $state<ConversationFeedback[]>([...data.feedbacks]);
 
 	// Access settings state
@@ -110,36 +109,44 @@
 		}
 	}
 
-	$effect(() => {
-		if (buildLog && logDiv) {
-			logDiv.scrollTop = logDiv.scrollHeight;
-		}
-	});
-
 	async function triggerBuild() {
 		building = true;
-		buildLog = '';
+		buildProgress = '';
 		buildError = '';
 
 		try {
 			const res = await fetch(`/api/apps/${data.app.id}/build`, { method: 'POST' });
-			if (!res.ok || !res.body) throw new Error(await res.text());
-
-			const reader = res.body.getReader();
-			const dec = new TextDecoder();
-			while (true) {
-				const { done, value } = await reader.read();
-				if (done) break;
-				buildLog += dec.decode(value);
-			}
-
-			// Refresh page to show updated state
-			window.location.reload();
+			if (!res.ok) throw new Error(await res.text());
+			const { jobId } = await res.json();
+			startBuildPolling(jobId);
 		} catch (err) {
 			buildError = err instanceof Error ? err.message : 'Build failed';
-		} finally {
 			building = false;
 		}
+	}
+
+	function startBuildPolling(jobId: string) {
+		const interval = setInterval(async () => {
+			try {
+				const res = await fetch(`/api/apps/${data.app.id}/jobs/${jobId}`);
+				if (!res.ok) throw new Error('Failed to check build status');
+				const job = await res.json();
+				buildProgress = job.progress ?? '';
+
+				if (job.status === 'done') {
+					clearInterval(interval);
+					window.location.reload();
+				} else if (job.status === 'error') {
+					clearInterval(interval);
+					buildError = job.error ?? 'Build failed';
+					building = false;
+				}
+			} catch (err) {
+				clearInterval(interval);
+				buildError = err instanceof Error ? err.message : 'Build failed';
+				building = false;
+			}
+		}, 2000);
 	}
 
 	async function deleteFeedback(id: string) {
@@ -241,9 +248,9 @@
 {/if}
 
 {#if building}
-	<div class="build-log" bind:this={logDiv}>
-		<p class="log-label">Generating code with Claude…</p>
-		<pre>{buildLog || '▋'}</pre>
+	<div class="build-status">
+		<span class="spinner"></span>
+		<span class="build-progress">{buildProgress || 'Starting build…'}</span>
 	</div>
 {/if}
 
@@ -545,24 +552,32 @@
 	.banner.error { background: #fef2f2; border: 1px solid #fca5a5; color: #b91c1c; }
 	.banner.success { background: #f0fdf4; border: 1px solid #86efac; color: #15803d; }
 
-	.build-log {
-		background: #1e1e2e;
+	.build-status {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		padding: 0.75rem 1rem;
+		background: #eef2ff;
+		border: 1px solid #c7d2fe;
 		border-radius: 8px;
-		padding: 1rem 1.25rem;
 		margin-bottom: 1.5rem;
-		max-height: 200px;
-		overflow: auto;
+		font-size: 0.875rem;
+		color: #4338ca;
 	}
 
-	.log-label { color: #7c3aed; font-size: 0.8rem; margin-bottom: 0.5rem; }
+	.build-progress { font-weight: 500; }
 
-	.build-log pre {
-		color: #a6e3a1;
-		font-size: 0.78rem;
-		white-space: pre-wrap;
-		word-break: break-all;
-		font-family: 'Fira Code', monospace;
+	.spinner {
+		width: 1rem;
+		height: 1rem;
+		border: 2px solid #c7d2fe;
+		border-top-color: #4f46e5;
+		border-radius: 50%;
+		animation: spin 0.8s linear infinite;
+		flex-shrink: 0;
 	}
+
+	@keyframes spin { to { transform: rotate(360deg); } }
 
 	.two-col {
 		display: grid;
