@@ -16,9 +16,10 @@ if (TEST_MODE) {
 	_getDocs = (auth) => mock.getMockDocs(auth) as any;
 } else {
 	const { google } = await import('googleapis');
-	_getDrive = (auth) => google.drive({ version: 'v3', auth });
-	_getSheets = (auth) => google.sheets({ version: 'v4', auth });
-	_getDocs = (auth) => google.docs({ version: 'v1', auth });
+	const { wrapWithRetry } = await import('./retry.js');
+	_getDrive = (auth) => wrapWithRetry(google.drive({ version: 'v3', auth }));
+	_getSheets = (auth) => wrapWithRetry(google.sheets({ version: 'v4', auth }));
+	_getDocs = (auth) => wrapWithRetry(google.docs({ version: 'v1', auth }));
 }
 
 export const getDrive = _getDrive;
