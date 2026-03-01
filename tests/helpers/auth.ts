@@ -44,6 +44,36 @@ export async function setRootSession(
 }
 
 /**
+ * Mint and set a user-level JWT cookie (member auth).
+ */
+export async function setUserToken(
+	context: BrowserContext,
+	appId: string,
+	userId: string,
+	email: string,
+	role: 'owner' | 'member' = 'member',
+	canChat: boolean = false
+): Promise<void> {
+	const userSecret = new TextEncoder().encode(`${JWT_SECRET}${appId}_users`);
+	const token = await new SignJWT({ appId, userId, email, role, can_chat: canChat })
+		.setProtectedHeader({ alg: 'HS256' })
+		.setIssuedAt()
+		.setExpirationTime('90d')
+		.sign(userSecret);
+
+	const cookieName = `app_user_${appId.replace(/[^a-zA-Z0-9]/g, '_')}`;
+
+	await context.addCookies([
+		{
+			name: cookieName,
+			value: token,
+			domain: 'localhost',
+			path: '/'
+		}
+	]);
+}
+
+/**
  * Mint and set an app-level JWT cookie.
  */
 export async function setAppToken(

@@ -496,12 +496,14 @@ export async function deleteConversationEntry(
 // ─── App user management (_users tab) ─────────────────────────────────────────
 
 const USERS_TAB = '_users';
-const USER_HEADERS = ['id', 'email', 'password_hash', 'created_at'] as const;
+const USER_HEADERS = ['id', 'email', 'password_hash', 'role', 'can_chat', 'created_at'] as const;
 
 export interface AppUser {
 	id: string;
 	email: string;
 	password_hash: string;
+	role: 'owner' | 'member';
+	can_chat: boolean;
 	created_at: string;
 }
 
@@ -511,16 +513,51 @@ async function ensureUsersTab(auth: OAuth2Client, spreadsheetId: string): Promis
 
 	const res = await sheets.spreadsheets.values.get({
 		spreadsheetId,
-		range: `${USERS_TAB}!A1:D1`
+		range: `${USERS_TAB}!A1:F1`
 	});
 
-	if (!res.data.values?.length) {
+	const header = res.data.values?.[0] ?? [];
+
+	if (!header.length) {
+		// No header at all — write fresh
 		await sheets.spreadsheets.values.update({
 			spreadsheetId,
 			range: `${USERS_TAB}!A1`,
 			valueInputOption: 'RAW',
 			requestBody: { values: [[...USER_HEADERS]] }
 		});
+	} else if (header.length === 4 && header[3] === 'created_at') {
+		// Old 4-column schema — migrate: update header and backfill existing rows
+		await sheets.spreadsheets.values.update({
+			spreadsheetId,
+			range: `${USERS_TAB}!A1`,
+			valueInputOption: 'RAW',
+			requestBody: { values: [[...USER_HEADERS]] }
+		});
+
+		// Backfill role='member', can_chat='false' on existing data rows
+		const dataRes = await sheets.spreadsheets.values.get({
+			spreadsheetId,
+			range: `${USERS_TAB}!A2:D`
+		});
+		const dataRows = dataRes.data.values ?? [];
+		if (dataRows.length > 0) {
+			const backfill = dataRows.map(() => ['member', 'false']);
+			await sheets.spreadsheets.values.update({
+				spreadsheetId,
+				range: `${USERS_TAB}!D2:E${dataRows.length + 1}`,
+				valueInputOption: 'RAW',
+				requestBody: { values: backfill }
+			});
+			// Move created_at from column D to column F
+			const createdAts = dataRows.map((r) => [r[3] ?? '']);
+			await sheets.spreadsheets.values.update({
+				spreadsheetId,
+				range: `${USERS_TAB}!F2:F${dataRows.length + 1}`,
+				valueInputOption: 'RAW',
+				requestBody: { values: createdAts }
+			});
+		}
 	}
 }
 
@@ -539,7 +576,7 @@ export async function findAppUser(
 
 	const res = await sheets.spreadsheets.values.get({
 		spreadsheetId,
-		range: `${USERS_TAB}!A:D`
+		range: `${USERS_TAB}!A:F`
 	});
 
 	const rows = res.data.values ?? [];
@@ -551,7 +588,9 @@ export async function findAppUser(
 		id: row[0] ?? '',
 		email: row[1] ?? '',
 		password_hash: row[2] ?? '',
-		created_at: row[3] ?? ''
+		role: row[3] === 'owner' ? 'owner' : 'member',
+		can_chat: (row[4] ?? '').toLowerCase() === 'true',
+		created_at: row[5] ?? ''
 	};
 }
 
@@ -560,7 +599,9 @@ export async function createAppUser(
 	rootFolderId: string,
 	appId: string,
 	email: string,
-	passwordHash: string
+	passwordHash: string,
+	role: 'owner' | 'member' = 'member',
+	canChat: boolean = false
 ): Promise<string> {
 	const app = await getAppById(auth, rootFolderId, appId);
 	if (!app?.database_sheet_id) throw new Error('App has no database sheet');
@@ -576,8 +617,130 @@ export async function createAppUser(
 		spreadsheetId,
 		range: `${USERS_TAB}!A:A`,
 		valueInputOption: 'RAW',
-		requestBody: { values: [[userId, email, passwordHash, now]] }
+		requestBody: { values: [[userId, email, passwordHash, role, String(canChat), now]] }
 	});
 
 	return userId;
+}
+
+export async function listAppUsers(
+	auth: OAuth2Client,
+	rootFolderId: string,
+	appId: string
+): Promise<AppUser[]> {
+	const app = await getAppById(auth, rootFolderId, appId);
+	if (!app?.database_sheet_id) return [];
+
+	const spreadsheetId = app.database_sheet_id;
+	await ensureUsersTab(auth, spreadsheetId);
+	const sheets = getSheets(auth);
+
+	const res = await sheets.spreadsheets.values.get({
+		spreadsheetId,
+		range: `${USERS_TAB}!A:F`
+	});
+
+	const rows = res.data.values ?? [];
+	return rows
+		.slice(1)
+		.filter((r) => r[0])
+		.map((r) => ({
+			id: r[0] ?? '',
+			email: r[1] ?? '',
+			password_hash: r[2] ?? '',
+			role: (r[3] === 'owner' ? 'owner' : 'member') as 'owner' | 'member',
+			can_chat: (r[4] ?? '').toLowerCase() === 'true',
+			created_at: r[5] ?? ''
+		}));
+}
+
+export async function updateAppUser(
+	auth: OAuth2Client,
+	rootFolderId: string,
+	appId: string,
+	userId: string,
+	updates: Partial<Pick<AppUser, 'role' | 'can_chat' | 'password_hash'>>
+): Promise<boolean> {
+	const app = await getAppById(auth, rootFolderId, appId);
+	if (!app?.database_sheet_id) return false;
+
+	const spreadsheetId = app.database_sheet_id;
+	await ensureUsersTab(auth, spreadsheetId);
+	const sheets = getSheets(auth);
+
+	const res = await sheets.spreadsheets.values.get({
+		spreadsheetId,
+		range: `${USERS_TAB}!A:F`
+	});
+
+	const rows = res.data.values ?? [];
+	const rowIndex = rows.findIndex((r, i) => i > 0 && r[0] === userId);
+	if (rowIndex === -1) return false;
+
+	const row = rows[rowIndex];
+	const updated = [
+		row[0] ?? '',
+		row[1] ?? '',
+		updates.password_hash !== undefined ? updates.password_hash : (row[2] ?? ''),
+		updates.role !== undefined ? updates.role : (row[3] ?? 'member'),
+		updates.can_chat !== undefined ? String(updates.can_chat) : (row[4] ?? 'false'),
+		row[5] ?? ''
+	];
+
+	const sheetRow = rowIndex + 1;
+	await sheets.spreadsheets.values.update({
+		spreadsheetId,
+		range: `${USERS_TAB}!A${sheetRow}:F${sheetRow}`,
+		valueInputOption: 'RAW',
+		requestBody: { values: [updated] }
+	});
+
+	return true;
+}
+
+export async function deleteAppUser(
+	auth: OAuth2Client,
+	rootFolderId: string,
+	appId: string,
+	userId: string
+): Promise<boolean> {
+	const app = await getAppById(auth, rootFolderId, appId);
+	if (!app?.database_sheet_id) return false;
+
+	const spreadsheetId = app.database_sheet_id;
+	const sheets = getSheets(auth);
+
+	// Find the _users tab's numeric ID
+	const meta = await sheets.spreadsheets.get({ spreadsheetId });
+	const usersSheet = meta.data.sheets?.find((s) => s.properties?.title === USERS_TAB);
+	if (!usersSheet?.properties) return false;
+	const gid = usersSheet.properties.sheetId!;
+
+	// Find which row has this user ID
+	const res = await sheets.spreadsheets.values.get({
+		spreadsheetId,
+		range: `${USERS_TAB}!A:A`
+	});
+	const rows = res.data.values ?? [];
+	const rowIndex = rows.findIndex((r, i) => i > 0 && r[0] === userId);
+	if (rowIndex === -1) return false;
+
+	await sheets.spreadsheets.batchUpdate({
+		spreadsheetId,
+		requestBody: {
+			requests: [
+				{
+					deleteDimension: {
+						range: {
+							sheetId: gid,
+							dimension: 'ROWS',
+							startIndex: rowIndex,
+							endIndex: rowIndex + 1
+						}
+					}
+				}
+			]
+		}
+	});
+	return true;
 }

@@ -24,6 +24,26 @@ export async function resetMocks(opts: {
 	if (!res.ok) throw new Error(`Reset failed: ${res.status} ${await res.text()}`);
 }
 
+export async function seedMember(opts: {
+	rootFolderId: string;
+	appId: string;
+	databaseSheetId: string;
+	email: string;
+	role?: 'owner' | 'member';
+	canChat?: boolean;
+	passwordHash?: string;
+}): Promise<void> {
+	const res = await fetch(`${BASE_URL}/api/test/seed`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({
+			action: 'seedMember',
+			...opts
+		})
+	});
+	if (!res.ok) throw new Error(`seedMember failed: ${res.status} ${await res.text()}`);
+}
+
 export async function seedApp(opts: {
 	rootFolderId: string;
 	appId: string;

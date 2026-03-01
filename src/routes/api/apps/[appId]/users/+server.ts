@@ -67,8 +67,8 @@ export const POST: RequestHandler = async ({ params, request, url, cookies }) =>
 		}
 
 		const passwordHash = hashPassword(password);
-		const userId = await createAppUser(auth, rootFolderId, appId, email, passwordHash);
-		const token = await signUserToken(appId, userId, email);
+		const userId = await createAppUser(auth, rootFolderId, appId, email, passwordHash, 'member', false);
+		const token = await signUserToken(appId, userId, email, 'member', false);
 
 		cookies.set(userCookieName(appId), token, cookieOpts(appId));
 		return json({ userId, email }, { status: 201 });
@@ -88,7 +88,7 @@ export const POST: RequestHandler = async ({ params, request, url, cookies }) =>
 			return json({ error: 'Invalid email or password' }, { status: 401 });
 		}
 
-		const token = await signUserToken(appId, appUser.id, appUser.email);
+		const token = await signUserToken(appId, appUser.id, appUser.email, appUser.role, appUser.can_chat);
 		cookies.set(userCookieName(appId), token, cookieOpts(appId));
 		return json({ userId: appUser.id, email: appUser.email });
 	}
@@ -107,8 +107,8 @@ export const GET: RequestHandler = async ({ params, cookies }) => {
 	const token = cookies.get(userCookieName(appId));
 	if (!token) return json({ error: 'Not authenticated' }, { status: 401 });
 
-	const { valid, userId, email } = await verifyUserToken(token, appId);
+	const { valid, userId, email, role, can_chat } = await verifyUserToken(token, appId);
 	if (!valid) return json({ error: 'Invalid or expired token' }, { status: 401 });
 
-	return json({ userId, email });
+	return json({ userId, email, role, can_chat });
 };

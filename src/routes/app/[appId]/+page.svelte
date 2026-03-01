@@ -35,6 +35,85 @@
 	let spendError = $state('');
 	let spendSuccess = $state('');
 
+	// Members state
+	type MemberItem = { id: string; email: string; role: 'owner' | 'member'; can_chat: boolean; has_password: boolean; created_at: string };
+	let members = $state<MemberItem[]>([...data.members]);
+	let newMemberEmail = $state('');
+	let newMemberRole = $state<'owner' | 'member'>('member');
+	let newMemberCanChat = $state(false);
+	let memberSaving = $state(false);
+	let memberError = $state('');
+	let memberSuccess = $state('');
+
+	async function addMember() {
+		if (!newMemberEmail.trim()) return;
+		memberSaving = true;
+		memberError = '';
+		memberSuccess = '';
+		try {
+			const res = await fetch(`/api/apps/${data.app.id}/members`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					email: newMemberEmail.trim(),
+					role: newMemberRole,
+					can_chat: newMemberCanChat || newMemberRole === 'owner'
+				})
+			});
+			if (!res.ok) throw new Error((await res.json()).error ?? 'Failed to add member');
+			const body = await res.json();
+			members = [...members, {
+				id: body.userId,
+				email: body.email,
+				role: body.role,
+				can_chat: body.can_chat,
+				has_password: false,
+				created_at: new Date().toISOString()
+			}];
+			newMemberEmail = '';
+			newMemberRole = 'member';
+			newMemberCanChat = false;
+			memberSuccess = 'Member added.';
+		} catch (err) {
+			memberError = err instanceof Error ? err.message : 'Failed to add member';
+		} finally {
+			memberSaving = false;
+		}
+	}
+
+	async function updateMember(userId: string, updates: { role?: string; can_chat?: boolean }) {
+		memberError = '';
+		try {
+			const res = await fetch(`/api/apps/${data.app.id}/members`, {
+				method: 'PATCH',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ userId, ...updates })
+			});
+			if (!res.ok) throw new Error((await res.json()).error ?? 'Failed to update');
+			members = members.map((m) =>
+				m.id === userId ? { ...m, ...updates } as MemberItem : m
+			);
+		} catch (err) {
+			memberError = err instanceof Error ? err.message : 'Failed to update member';
+		}
+	}
+
+	async function removeMember(userId: string) {
+		if (!confirm('Remove this member?')) return;
+		memberError = '';
+		try {
+			const res = await fetch(`/api/apps/${data.app.id}/members`, {
+				method: 'DELETE',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ userId })
+			});
+			if (!res.ok) throw new Error((await res.json()).error ?? 'Failed to delete');
+			members = members.filter((m) => m.id !== userId);
+		} catch (err) {
+			memberError = err instanceof Error ? err.message : 'Failed to remove member';
+		}
+	}
+
 	$effect(() => {
 		if (buildLog && logDiv) {
 			logDiv.scrollTop = logDiv.scrollHeight;
@@ -320,6 +399,91 @@
 			{/if}
 		</div>
 	{/if}
+</section>
+
+<!-- Members -->
+<section class="card members-section">
+	<h2>Members <span class="badge">{members.length}</span></h2>
+
+	{#if memberError}
+		<div class="banner error small">{memberError}</div>
+	{/if}
+	{#if memberSuccess}
+		<div class="banner success small">{memberSuccess}</div>
+	{/if}
+
+	<div class="member-add-form">
+		<input
+			type="email"
+			bind:value={newMemberEmail}
+			placeholder="email@example.com"
+			class="member-email-input"
+		/>
+		<select bind:value={newMemberRole} class="member-role-select">
+			<option value="member">Member</option>
+			<option value="owner">Owner</option>
+		</select>
+		<label class="member-chat-toggle">
+			<input type="checkbox" bind:checked={newMemberCanChat} />
+			<span>Chat</span>
+		</label>
+		<button class="btn-primary small" onclick={addMember} disabled={memberSaving || !newMemberEmail.trim()}>
+			{memberSaving ? 'Adding...' : 'Add'}
+		</button>
+	</div>
+
+	{#if members.length > 0}
+		<table class="member-table">
+			<thead>
+				<tr>
+					<th>Email</th>
+					<th>Role</th>
+					<th>Chat</th>
+					<th>Status</th>
+					<th></th>
+				</tr>
+			</thead>
+			<tbody>
+				{#each members as member (member.id)}
+					<tr>
+						<td class="member-email">{member.email}</td>
+						<td>
+							<select
+								value={member.role}
+								onchange={(e) => updateMember(member.id, { role: (e.target as HTMLSelectElement).value })}
+								class="member-role-inline"
+							>
+								<option value="member">Member</option>
+								<option value="owner">Owner</option>
+							</select>
+						</td>
+						<td>
+							<input
+								type="checkbox"
+								checked={member.can_chat}
+								onchange={() => updateMember(member.id, { can_chat: !member.can_chat })}
+							/>
+						</td>
+						<td>
+							<span class="status-badge {member.has_password ? 'claimed' : 'pending'}">
+								{member.has_password ? 'Claimed' : 'Pending'}
+							</span>
+						</td>
+						<td>
+							<button class="fb-delete" onclick={() => removeMember(member.id)} aria-label="Remove member">&#10005;</button>
+						</td>
+					</tr>
+				{/each}
+			</tbody>
+		</table>
+	{:else}
+		<p class="muted">No members yet. Add members by email to give them access.</p>
+	{/if}
+
+	<div class="login-url-area">
+		<p class="magic-label">Login URL <span class="badge-muted">share with members</span></p>
+		<code class="login-url-display">{typeof window !== 'undefined' ? window.location.origin : ''}/serve/{data.app.id}/login</code>
+	</div>
 </section>
 
 <!-- Spend Control -->
@@ -724,4 +888,111 @@
 	}
 
 	.fb-delete:hover { background: #fee2e2; color: #b91c1c; }
+
+	/* Members section */
+	.members-section { margin-top: 1rem; margin-bottom: 1.5rem; }
+
+	.member-add-form {
+		display: flex;
+		gap: 0.5rem;
+		align-items: center;
+		margin-bottom: 1rem;
+		flex-wrap: wrap;
+	}
+
+	.member-email-input {
+		flex: 1;
+		min-width: 200px;
+		padding: 0.5rem 0.65rem;
+		border: 1px solid #d1d5db;
+		border-radius: 7px;
+		font-size: 0.875rem;
+		font-family: inherit;
+	}
+
+	.member-email-input:focus {
+		outline: none;
+		border-color: #4f46e5;
+		box-shadow: 0 0 0 2px #e0e7ff;
+	}
+
+	.member-role-select {
+		padding: 0.5rem 0.65rem;
+		border: 1px solid #d1d5db;
+		border-radius: 7px;
+		font-size: 0.825rem;
+		font-family: inherit;
+		background: #fff;
+	}
+
+	.member-chat-toggle {
+		display: flex;
+		align-items: center;
+		gap: 0.3rem;
+		font-size: 0.825rem;
+		color: #374151;
+		white-space: nowrap;
+		cursor: pointer;
+	}
+
+	.member-chat-toggle input { width: 0.9rem; height: 0.9rem; cursor: pointer; }
+
+	.member-table {
+		width: 100%;
+		border-collapse: collapse;
+		font-size: 0.825rem;
+		margin-bottom: 1rem;
+	}
+
+	.member-table th {
+		text-align: left;
+		padding: 0.5rem 0.65rem;
+		border-bottom: 2px solid #e5e7eb;
+		color: #6b7280;
+		font-weight: 500;
+		font-size: 0.75rem;
+		text-transform: uppercase;
+		letter-spacing: 0.03em;
+	}
+
+	.member-table td {
+		padding: 0.5rem 0.65rem;
+		border-bottom: 1px solid #f3f4f6;
+		color: #374151;
+	}
+
+	.member-email { font-weight: 500; }
+
+	.member-role-inline {
+		padding: 0.2rem 0.4rem;
+		border: 1px solid #e5e7eb;
+		border-radius: 5px;
+		font-size: 0.78rem;
+		background: #fff;
+	}
+
+	.status-badge {
+		display: inline-block;
+		font-size: 0.72rem;
+		font-weight: 500;
+		padding: 0.1rem 0.5rem;
+		border-radius: 999px;
+	}
+
+	.status-badge.claimed { background: #f0fdf4; color: #15803d; }
+	.status-badge.pending { background: #fef3c7; color: #92400e; }
+
+	.login-url-area { margin-top: 1rem; }
+
+	.login-url-display {
+		display: block;
+		padding: 0.45rem 0.65rem;
+		background: #f9fafb;
+		border: 1px solid #e5e7eb;
+		border-radius: 7px;
+		font-size: 0.8rem;
+		color: #4b5563;
+		word-break: break-all;
+		margin-top: 0.35rem;
+	}
 </style>

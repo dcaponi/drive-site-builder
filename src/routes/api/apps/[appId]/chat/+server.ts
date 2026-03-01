@@ -24,6 +24,7 @@ import {
 } from '$lib/server/anthropic.js';
 import { parseEditBlocks, applyEditBlocks, isFullHtml, stripDiffMarkers } from '$lib/server/editDiff.js';
 import { verifyAppToken, appCookieName } from '$lib/server/appAuth.js';
+import { verifyUserToken, userCookieName } from '$lib/server/userAuth.js';
 import { createJob, updateJob } from '$lib/server/jobQueue.js';
 import { error, json } from '@sveltejs/kit';
 import Anthropic from '@anthropic-ai/sdk';
@@ -54,15 +55,32 @@ export const POST: RequestHandler = async ({ params, request, locals, url, cooki
 		const app = await getAppById(auth, rootFolderId, appId);
 		if (!app) return json({ error: 'App not found' }, { status: 404 });
 
-		if (app.app_password) {
-			const cookieToken = cookies.get(appCookieName(app.id));
-			if (!cookieToken) return json({ error: 'Unauthorized' }, { status: 401 });
-			const { valid, role, can_chat } = await verifyAppToken(cookieToken, app.id);
-			if (!valid || !can_chat) {
-				return json({ error: 'Chat requires app-owner access' }, { status: 403 });
+		let chatAllowed = false;
+
+		// Check user JWT (member-level auth)
+		const userToken = cookies.get(userCookieName(app.id));
+		if (userToken) {
+			const userResult = await verifyUserToken(userToken, app.id);
+			if (userResult.valid) {
+				if (!userResult.can_chat) {
+					return json({ error: 'Chat requires can_chat permission' }, { status: 403 });
+				}
+				chatAllowed = true;
 			}
-		} else {
-			return json({ error: 'Chat requires app-owner authentication' }, { status: 403 });
+		}
+
+		// Fall back to app-password token
+		if (!chatAllowed) {
+			if (app.app_password) {
+				const cookieToken = cookies.get(appCookieName(app.id));
+				if (!cookieToken) return json({ error: 'Unauthorized' }, { status: 401 });
+				const { valid, can_chat } = await verifyAppToken(cookieToken, app.id);
+				if (!valid || !can_chat) {
+					return json({ error: 'Chat requires app-owner access' }, { status: 403 });
+				}
+			} else {
+				return json({ error: 'Chat requires authentication' }, { status: 403 });
+			}
 		}
 	}
 

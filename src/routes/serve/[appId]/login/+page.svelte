@@ -1,63 +1,59 @@
 <script lang="ts">
-	import type { PageData } from './$types';
-	import type { ActionData } from './$types';
-	import ChatBubble from '$lib/components/ChatBubble.svelte';
+	import type { PageData, ActionData } from './$types';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
-	let iframeEl: HTMLIFrameElement | undefined = $state();
-
-	function reloadApp() {
-		if (iframeEl) iframeEl.src = iframeEl.src;
-	}
-
-	const canChat = data.can_chat === true;
+	let needsConfirm = $derived(form?.needsConfirm === true);
+	let formEmail = $derived(form?.email ?? '');
 </script>
 
 <svelte:head>
-	<title>{data.app.name}</title>
+	<title>Sign in - {data.app.name}</title>
 </svelte:head>
 
-{#if !data.authed}
-	<!-- Standard app password login -->
-	<div class="login-wrapper">
-		<div class="login-card">
-			<h1>{data.app.name}</h1>
-			<p class="login-subtitle">This app is password protected.</p>
-
-			{#if form?.error}
-				<div class="login-error">{form.error}</div>
+<div class="login-wrapper">
+	<div class="login-card">
+		<h1>{data.app.name}</h1>
+		<p class="login-subtitle">
+			{#if needsConfirm}
+				Set a password for your account
+			{:else}
+				Sign in to continue
 			{/if}
+		</p>
 
-			<form method="POST" action="?/login" class="login-form">
-				<label>
-					<span>Email</span>
-					<input type="email" name="email" required autocomplete="email" />
-				</label>
-				<label>
-					<span>Password</span>
-					<input type="password" name="password" required autocomplete="current-password" />
-				</label>
-				<button type="submit" class="login-btn">Sign in</button>
-			</form>
-		</div>
-	</div>
+		{#if form?.error}
+			<div class="login-error">{form.error}</div>
+		{/if}
 
-{:else if data.app.generated_code_doc_id}
-	<iframe
-		bind:this={iframeEl}
-		src="/serve/{data.app.id}/content"
-		title={data.app.name}
-	></iframe>
-	{#if canChat}
-		<ChatBubble appId={data.app.id} onUpdated={reloadApp} />
-	{/if}
-{:else}
-	<div class="not-built">
-		<h2>Not built yet</h2>
-		<p>Go to the <a href="/app/{data.app.id}">app page</a> and click "Build App".</p>
+		<form method="POST" action="?/login" class="login-form">
+			<label>
+				<span>Email</span>
+				<input
+					type="email"
+					name="email"
+					required
+					autocomplete="email"
+					value={needsConfirm ? formEmail : ''}
+					readonly={needsConfirm}
+				/>
+			</label>
+			<label>
+				<span>Password</span>
+				<input type="password" name="password" required autocomplete={needsConfirm ? 'new-password' : 'current-password'} />
+			</label>
+			{#if needsConfirm}
+				<label>
+					<span>Confirm password</span>
+					<input type="password" name="confirm_password" required autocomplete="new-password" />
+				</label>
+			{/if}
+			<button type="submit" class="login-btn">
+				{needsConfirm ? 'Set password & sign in' : 'Sign in'}
+			</button>
+		</form>
 	</div>
-{/if}
+</div>
 
 <style>
 	:global(html, body) {
@@ -65,13 +61,6 @@
 		padding: 0;
 		height: 100%;
 		overflow: hidden;
-	}
-
-	iframe {
-		width: 100vw;
-		height: 100vh;
-		border: none;
-		display: block;
 	}
 
 	.login-wrapper {
@@ -149,6 +138,11 @@
 		box-shadow: 0 0 0 2px #e0e7ff;
 	}
 
+	.login-form input[readonly] {
+		background: #f9fafb;
+		color: #6b7280;
+	}
+
 	.login-btn {
 		background: #4f46e5;
 		color: #fff;
@@ -163,24 +157,5 @@
 
 	.login-btn:hover {
 		background: #4338ca;
-	}
-
-	.not-built {
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		justify-content: center;
-		height: 100vh;
-		font-family: sans-serif;
-		color: #6b7280;
-	}
-
-	.not-built h2 {
-		font-size: 1.5rem;
-		margin-bottom: 0.5rem;
-	}
-
-	.not-built a {
-		color: #4f46e5;
 	}
 </style>

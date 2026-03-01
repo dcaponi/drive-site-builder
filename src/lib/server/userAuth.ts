@@ -41,9 +41,11 @@ function getUserSecret(appId: string): Uint8Array {
 export async function signUserToken(
 	appId: string,
 	userId: string,
-	email: string
+	email: string,
+	role: 'owner' | 'member' = 'member',
+	canChat: boolean = false
 ): Promise<string> {
-	return new SignJWT({ appId, userId, email })
+	return new SignJWT({ appId, userId, email, role, can_chat: canChat })
 		.setProtectedHeader({ alg: 'HS256' })
 		.setIssuedAt()
 		.setExpirationTime(`${TOKEN_MAX_AGE}s`)
@@ -53,16 +55,18 @@ export async function signUserToken(
 export async function verifyUserToken(
 	token: string,
 	appId: string
-): Promise<{ valid: boolean; userId: string; email: string }> {
+): Promise<{ valid: boolean; userId: string; email: string; role: 'owner' | 'member'; can_chat: boolean }> {
 	try {
 		const { payload } = await jwtVerify(token, getUserSecret(appId));
-		if (payload.appId !== appId) return { valid: false, userId: '', email: '' };
+		if (payload.appId !== appId) return { valid: false, userId: '', email: '', role: 'member', can_chat: false };
 		return {
 			valid: true,
 			userId: String(payload.userId ?? ''),
-			email: String(payload.email ?? '')
+			email: String(payload.email ?? ''),
+			role: payload.role === 'owner' ? 'owner' : 'member',
+			can_chat: payload.can_chat === true
 		};
 	} catch {
-		return { valid: false, userId: '', email: '' };
+		return { valid: false, userId: '', email: '', role: 'member', can_chat: false };
 	}
 }

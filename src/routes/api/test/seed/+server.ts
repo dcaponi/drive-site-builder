@@ -146,5 +146,40 @@ export const POST: RequestHandler = async ({ request }) => {
 		return json({ ok: true });
 	}
 
+	if (action === 'seedMember') {
+		const { databaseSheetId, email, role, canChat, passwordHash } = body;
+
+		const { getMockState } = await import('$lib/server/google.mock.js');
+		const { v4: uuidv4 } = await import('uuid');
+		const state = getMockState();
+		let tabs = state.sheets.get(databaseSheetId);
+		if (!tabs) {
+			state.sheets.set(databaseSheetId, new Map());
+			tabs = state.sheets.get(databaseSheetId)!;
+		}
+
+		const USER_HEADERS = ['id', 'email', 'password_hash', 'role', 'can_chat', 'created_at'];
+		let userRows = tabs.get('_users');
+		if (!userRows) {
+			userRows = [USER_HEADERS];
+			tabs.set('_users', userRows);
+		} else if (userRows.length === 0) {
+			userRows.push(USER_HEADERS);
+		}
+
+		const userId = uuidv4();
+		const now = new Date().toISOString();
+		userRows.push([
+			userId,
+			email ?? '',
+			passwordHash ?? '',
+			role ?? 'member',
+			String(canChat ?? false),
+			now
+		]);
+
+		return json({ ok: true, userId });
+	}
+
 	throw error(400, `Unknown action: ${action}`);
 };

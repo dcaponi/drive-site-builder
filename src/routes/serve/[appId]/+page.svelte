@@ -7,10 +7,6 @@
 
 	let iframeEl: HTMLIFrameElement | undefined = $state();
 
-	// User auth UI state
-	let authTab = $state<'login' | 'signup'>('login');
-	let showAdminLogin = $state(false);
-
 	function reloadApp() {
 		if (iframeEl) iframeEl.src = iframeEl.src;
 	}
@@ -22,90 +18,7 @@
 	<title>{data.app.name}</title>
 </svelte:head>
 
-{#if data.showUserAuth}
-	<!-- User sign-up / login UI -->
-	<div class="login-wrapper">
-		<div class="login-card">
-			<h1>{data.app.name}</h1>
-
-			{#if !showAdminLogin}
-				<!-- Tab switcher -->
-				<div class="auth-tabs">
-					<button
-						class="tab-btn {authTab === 'login' ? 'active' : ''}"
-						onclick={() => (authTab = 'login')}
-					>Sign in</button>
-					<button
-						class="tab-btn {authTab === 'signup' ? 'active' : ''}"
-						onclick={() => (authTab = 'signup')}
-					>Create account</button>
-				</div>
-
-				{#if form?.error}
-					<div class="login-error">{form.error}</div>
-				{/if}
-
-				{#if authTab === 'login'}
-					<form method="POST" action="?/userLogin" class="login-form">
-						<label>
-							<span>Email</span>
-							<input type="email" name="email" required autocomplete="email" />
-						</label>
-						<label>
-							<span>Password</span>
-							<input type="password" name="password" required autocomplete="current-password" />
-						</label>
-						<button type="submit" class="login-btn">Sign in</button>
-					</form>
-				{:else}
-					<form method="POST" action="?/signup" class="login-form">
-						<label>
-							<span>Email</span>
-							<input type="email" name="email" required autocomplete="email" />
-						</label>
-						<label>
-							<span>Password</span>
-							<input type="password" name="password" required autocomplete="new-password" />
-						</label>
-						<label>
-							<span>Confirm password</span>
-							<input type="password" name="confirm_password" required autocomplete="new-password" />
-						</label>
-						<button type="submit" class="login-btn">Create account</button>
-					</form>
-				{/if}
-
-				<button class="admin-link" onclick={() => (showAdminLogin = true)}>
-					Admin access
-				</button>
-			{:else}
-				<!-- Admin (app password) login -->
-				<p class="login-subtitle">Admin sign in</p>
-
-				{#if form?.error}
-					<div class="login-error">{form.error}</div>
-				{/if}
-
-				<form method="POST" action="?/login" class="login-form">
-					<label>
-						<span>Email</span>
-						<input type="email" name="email" required autocomplete="email" />
-					</label>
-					<label>
-						<span>App password</span>
-						<input type="password" name="password" required autocomplete="current-password" />
-					</label>
-					<button type="submit" class="login-btn">Sign in as admin</button>
-				</form>
-
-				<button class="admin-link" onclick={() => (showAdminLogin = false)}>
-					← Back to user login
-				</button>
-			{/if}
-		</div>
-	</div>
-
-{:else if !data.authed}
+{#if !data.authed}
 	<!-- Standard app password login -->
 	<div class="login-wrapper">
 		<div class="login-card">
@@ -194,35 +107,6 @@
 		margin-bottom: 1.5rem;
 	}
 
-	/* Tab switcher */
-	.auth-tabs {
-		display: flex;
-		gap: 0;
-		margin-bottom: 1.5rem;
-		border: 1px solid #e5e7eb;
-		border-radius: 8px;
-		overflow: hidden;
-	}
-
-	.tab-btn {
-		flex: 1;
-		padding: 0.5rem;
-		background: none;
-		border: none;
-		font-size: 0.875rem;
-		cursor: pointer;
-		color: #6b7280;
-		transition: background 0.1s, color 0.1s;
-	}
-
-	.tab-btn.active {
-		background: #4f46e5;
-		color: #fff;
-		font-weight: 600;
-	}
-
-	.tab-btn:hover:not(.active) { background: #f9fafb; }
-
 	.login-error {
 		background: #fef2f2;
 		border: 1px solid #fca5a5;
@@ -280,21 +164,6 @@
 	.login-btn:hover {
 		background: #4338ca;
 	}
-
-	.admin-link {
-		display: block;
-		width: 100%;
-		text-align: center;
-		font-size: 0.78rem;
-		color: #9ca3af;
-		background: none;
-		border: none;
-		cursor: pointer;
-		margin-top: 1.25rem;
-		padding: 0;
-	}
-
-	.admin-link:hover { color: #6b7280; text-decoration: underline; }
 
 	.not-built {
 		display: flex;

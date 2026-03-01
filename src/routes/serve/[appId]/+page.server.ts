@@ -1,20 +1,12 @@
 import type { PageServerLoad, Actions } from './$types';
 import type { SessionUser } from '$lib/server/auth.js';
 import { getAuthedClient } from '$lib/server/auth.js';
-import { lookupApp, getUserClient, isAnyUserAvailable } from '$lib/server/rootAuth.js';
+import { lookupApp, getUserClient } from '$lib/server/rootAuth.js';
 import { getAppById } from '$lib/server/sheets.js';
-import { findAppUser, createAppUser } from '$lib/server/sheets.js';
 import { verifyAppToken, signAppToken, appCookieName, type AppRole } from '$lib/server/appAuth.js';
-import {
-	hashPassword,
-	verifyPassword,
-	signUserToken,
-	verifyUserToken,
-	userCookieName
-} from '$lib/server/userAuth.js';
+import { verifyPassword } from '$lib/server/userAuth.js';
+import { verifyUserToken, userCookieName } from '$lib/server/userAuth.js';
 import { error, redirect, fail } from '@sveltejs/kit';
-
-const USER_COOKIE_MAX_AGE = 90 * 24 * 3600;
 
 function resolveAppAuth(user: SessionUser | null, reg: { ownerEmail: string; rootFolderId: string }, origin: string) {
 	const isOwner = user && user.email.toLowerCase() === reg.ownerEmail.toLowerCase();
@@ -38,36 +30,30 @@ export const load: PageServerLoad = async ({ params, locals, url, cookies }) => 
 
 	// ISOLATION: Only grant 'root' role if visitor IS the app owner
 	if (user && isOwner) {
-		return { app, authed: true, role: 'root' as const, showUserAuth: false, can_chat: true };
+		return { app, authed: true, role: 'root' as const, can_chat: true };
 	}
 
-	// ── Check for user-level auth (end-user sign-up/login) ──────────────────
-	if (app.allowed_domains.length > 0 && app.app_password) {
-		const appCookieToken = cookies.get(appCookieName(app.id));
-		if (appCookieToken) {
-			const { valid, role, can_chat } = await verifyAppToken(appCookieToken, app.id);
-			if (valid && role === 'app-owner') {
-				return { app, authed: true, role: 'app-owner' as const, showUserAuth: false, can_chat };
-			}
+	// ── Check for member-level auth (user JWT) ──────────────────────────────
+	const userToken = cookies.get(userCookieName(app.id));
+	if (userToken) {
+		const { valid, userId, email, role, can_chat } = await verifyUserToken(userToken, app.id);
+		if (valid) {
+			return { app, authed: true, role: role as string, userId, email, can_chat };
 		}
-
-		const userToken = cookies.get(userCookieName(app.id));
-		if (userToken) {
-			const { valid, userId, email } = await verifyUserToken(userToken, app.id);
-			if (valid) {
-				const owners = (app.app_owners ?? []).map((e) => e.toLowerCase().trim());
-				const role: AppRole = owners.includes(email.toLowerCase()) ? 'app-owner' : 'public';
-				const can_chat = role === 'app-owner';
-				return { app, authed: true, role, showUserAuth: false, userId, email, can_chat };
-			}
-		}
-
-		return { app, authed: false, role: 'public' as const, showUserAuth: true, can_chat: false };
 	}
 
-	// ── Standard app-password auth ──────────────────────────────────────────
+	// ── Check for app-owner token (app password or magic link cookie) ───────
+	const appCookieToken = cookies.get(appCookieName(app.id));
+	if (appCookieToken) {
+		const { valid, role, can_chat } = await verifyAppToken(appCookieToken, app.id);
+		if (valid) {
+			return { app, authed: true, role, can_chat };
+		}
+	}
+
+	// ── No password required — public access ────────────────────────────────
 	if (!app.app_password) {
-		return { app, authed: true, role: 'public' as const, showUserAuth: false, can_chat: false };
+		return { app, authed: true, role: 'public' as const, can_chat: false };
 	}
 
 	// Check for token in query param (magic link)
@@ -85,16 +71,7 @@ export const load: PageServerLoad = async ({ params, locals, url, cookies }) => 
 		}
 	}
 
-	// Check cookie
-	const cookieToken = cookies.get(appCookieName(app.id));
-	if (cookieToken) {
-		const { valid, role, can_chat } = await verifyAppToken(cookieToken, app.id);
-		if (valid) {
-			return { app, authed: true, role, showUserAuth: false, can_chat };
-		}
-	}
-
-	return { app, authed: false, role: 'public' as const, showUserAuth: false, can_chat: false };
+	return { app, authed: false, role: 'public' as const, can_chat: false };
 };
 
 export const actions: Actions = {
@@ -127,82 +104,5 @@ export const actions: Actions = {
 		});
 
 		throw redirect(302, `/serve/${app.id}`);
-	},
-
-	signup: async ({ params, url, request, cookies }) => {
-		const reg = lookupApp(params.appId!);
-		if (!reg) return fail(503, { error: 'App owner must log in first' });
-
-		const auth = getUserClient(reg.ownerEmail, url.origin);
-		const app = await getAppById(auth, reg.rootFolderId, params.appId!);
-		if (!app) return fail(404, { error: 'App not found' });
-
-		const data = await request.formData();
-		const email = String(data.get('email') ?? '').trim().toLowerCase();
-		const password = String(data.get('password') ?? '');
-		const confirm = String(data.get('confirm_password') ?? '');
-
-		if (!email || !password) return fail(400, { error: 'Email and password are required' });
-		if (password !== confirm) return fail(400, { error: 'Passwords do not match' });
-
-		if (app.allowed_domains.length > 0) {
-			const domain = email.split('@')[1] ?? '';
-			if (!app.allowed_domains.includes(domain)) {
-				return fail(403, {
-					error: `Sign-up is restricted to: ${app.allowed_domains.join(', ')}`
-				});
-			}
-		}
-
-		const existing = await findAppUser(auth, reg.rootFolderId, params.appId!, email);
-		if (existing) return fail(409, { error: 'An account with this email already exists' });
-
-		const passwordHash = hashPassword(password);
-		const userId = await createAppUser(auth, reg.rootFolderId, params.appId!, email, passwordHash);
-		const token = await signUserToken(params.appId!, userId, email);
-
-		cookies.set(userCookieName(params.appId!), token, {
-			path: '/',
-			httpOnly: true,
-			sameSite: 'lax',
-			maxAge: USER_COOKIE_MAX_AGE
-		});
-
-		throw redirect(302, `/serve/${params.appId!}`);
-	},
-
-	userLogin: async ({ params, url, request, cookies }) => {
-		const reg = lookupApp(params.appId!);
-		if (!reg) return fail(503, { error: 'App owner must log in first' });
-
-		const auth = getUserClient(reg.ownerEmail, url.origin);
-		const app = await getAppById(auth, reg.rootFolderId, params.appId!);
-		if (!app) return fail(404, { error: 'App not found' });
-
-		const data = await request.formData();
-		const email = String(data.get('email') ?? '').trim().toLowerCase();
-		const password = String(data.get('password') ?? '');
-
-		if (!email || !password) return fail(400, { error: 'Email and password are required' });
-
-		const appUser = await findAppUser(auth, reg.rootFolderId, params.appId!, email);
-		if (!appUser || !verifyPassword(password, appUser.password_hash)) {
-			return fail(401, { error: 'Invalid email or password' });
-		}
-
-		const token = await signUserToken(params.appId!, appUser.id, appUser.email);
-		cookies.set(userCookieName(params.appId!), token, {
-			path: '/',
-			httpOnly: true,
-			sameSite: 'lax',
-			maxAge: USER_COOKIE_MAX_AGE
-		});
-
-		throw redirect(302, `/serve/${params.appId!}`);
-	},
-
-	userLogout: async ({ params, cookies }) => {
-		cookies.delete(userCookieName(params.appId!), { path: '/' });
-		throw redirect(302, `/serve/${params.appId!}`);
 	}
 };
