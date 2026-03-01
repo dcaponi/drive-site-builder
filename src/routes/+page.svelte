@@ -15,7 +15,7 @@
 		if (iframeEl) iframeEl.src = iframeEl.src;
 	}
 
-	const canChat = data.role === 'app-owner' || data.role === 'root';
+	const canChat = data.can_chat === true;
 </script>
 
 <svelte:head>

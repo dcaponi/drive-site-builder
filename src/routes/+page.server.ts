@@ -57,16 +57,16 @@ export const load: PageServerLoad = async ({ locals, url, cookies }) => {
 
 	// ISOLATION: Only the app owner gets root role
 	if (user && isOwner) {
-		return { homeApp, authed: true, role: 'root' as const, showUserAuth: false };
+		return { homeApp, authed: true, role: 'root' as const, showUserAuth: false, can_chat: true };
 	}
 
 	// Check for user-level auth
 	if (homeApp.allowed_domains.length > 0 && homeApp.app_password) {
 		const appCookieToken = cookies.get(appCookieName(homeApp.id));
 		if (appCookieToken) {
-			const { valid, role } = await verifyAppToken(appCookieToken, homeApp.id);
+			const { valid, role, can_chat } = await verifyAppToken(appCookieToken, homeApp.id);
 			if (valid && role === 'app-owner') {
-				return { homeApp, authed: true, role: 'app-owner' as const, showUserAuth: false };
+				return { homeApp, authed: true, role: 'app-owner' as const, showUserAuth: false, can_chat };
 			}
 		}
 
@@ -76,16 +76,17 @@ export const load: PageServerLoad = async ({ locals, url, cookies }) => {
 			if (valid) {
 				const owners = (homeApp.app_owners ?? []).map((e) => e.toLowerCase().trim());
 				const role: AppRole = owners.includes(email.toLowerCase()) ? 'app-owner' : 'public';
-				return { homeApp, authed: true, role, showUserAuth: false, userId, email };
+				const can_chat = role === 'app-owner';
+				return { homeApp, authed: true, role, showUserAuth: false, userId, email, can_chat };
 			}
 		}
 
-		return { homeApp, authed: false, role: 'public' as const, showUserAuth: true };
+		return { homeApp, authed: false, role: 'public' as const, showUserAuth: true, can_chat: false };
 	}
 
 	// Standard app-password auth
 	if (!homeApp.app_password) {
-		return { homeApp, authed: true, role: 'public' as const, showUserAuth: false };
+		return { homeApp, authed: true, role: 'public' as const, showUserAuth: false, can_chat: false };
 	}
 
 	// Check for token in query param (magic link)
@@ -106,13 +107,13 @@ export const load: PageServerLoad = async ({ locals, url, cookies }) => {
 	// Check cookie
 	const cookieToken = cookies.get(appCookieName(homeApp.id));
 	if (cookieToken) {
-		const { valid, role } = await verifyAppToken(cookieToken, homeApp.id);
+		const { valid, role, can_chat } = await verifyAppToken(cookieToken, homeApp.id);
 		if (valid) {
-			return { homeApp, authed: true, role, showUserAuth: false };
+			return { homeApp, authed: true, role, showUserAuth: false, can_chat };
 		}
 	}
 
-	return { homeApp, authed: false, role: 'public' as const, showUserAuth: false };
+	return { homeApp, authed: false, role: 'public' as const, showUserAuth: false, can_chat: false };
 };
 
 export const actions: Actions = {

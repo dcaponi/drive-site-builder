@@ -1,5 +1,5 @@
 import type { OAuth2Client } from 'google-auth-library';
-import { getSheets } from './google.js';
+import { getSheets, getDrive } from './google.js';
 import type { AppConfig, TableSchema, ColumnDef, CrudRecord, Conversation } from '../types.js';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -27,8 +27,7 @@ async function findOrCreateSheet(
 	const cached = cache.get(rootFolderId);
 	if (cached) return cached;
 
-	const { google } = await import('googleapis');
-	const drive = google.drive({ version: 'v3', auth });
+	const drive = getDrive(auth);
 
 	// Try to find existing
 	const res = await drive.files.list({
@@ -57,6 +56,11 @@ async function findOrCreateSheet(
 	const id = created.data.id!;
 	cache.set(rootFolderId, id);
 	return id;
+}
+
+export function clearSheetCaches(): void {
+	_configSheetIds.clear();
+	_conversationsSheetIds.clear();
 }
 
 async function getConfigSheetId(auth: OAuth2Client, rootFolderId: string): Promise<string> {

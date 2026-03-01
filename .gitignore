@@ -10,3 +10,7 @@ node_modules
 .root-credentials.json
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+.user-credentials.json
+.app-registry.json
+test-results/
+playwright-report/

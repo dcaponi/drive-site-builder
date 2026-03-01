@@ -1,5 +1,5 @@
 import type { OAuth2Client } from 'google-auth-library';
-import { getDrive } from './google.js';
+import { getDrive, getDocs } from './google.js';
 import type { AppConfig } from '../types.js';
 import { getConfigSheet, updateAppInConfig, addAppToConfig } from './sheets.js';
 import { v4 as uuidv4 } from 'uuid';
@@ -341,7 +341,6 @@ export async function createAppScaffold(
 	clientSlug?: string
 ): Promise<AppConfig> {
 	const drive = getDrive(auth);
-	const { google } = await import('googleapis');
 
 	// Determine parent folder
 	let parentId: string;
@@ -402,8 +401,7 @@ export async function appendToRequirementsDoc(
 	timestamp: string
 ): Promise<void> {
 	try {
-		const { google } = await import('googleapis');
-		const docs = google.docs({ version: 'v1', auth });
+		const docs = getDocs(auth);
 
 		// Get current document to find end index
 		const doc = await docs.documents.get({ documentId: requirementsDocId });
