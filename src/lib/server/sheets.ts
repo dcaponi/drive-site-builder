@@ -119,8 +119,8 @@ const APP_HEADERS = [
 	'created_at',
 	'updated_at',
 	'last_built_at',
-	'app_owners',
-	'app_password',
+	'_reserved',
+	'members_only',
 	'allowed_domains',
 	'spend_usd',
 	'spend_limit_usd',
@@ -131,6 +131,7 @@ const APP_HEADERS = [
 ] as const;
 
 function serializeConfigValue(key: string, value: unknown): string {
+	if (key === '_reserved') return '';
 	if (Array.isArray(value)) return value.join(',');
 	if (typeof value === 'boolean') return value ? 'true' : 'false';
 	if (typeof value === 'number') return String(value);
@@ -179,8 +180,7 @@ export async function getConfigSheet(auth: OAuth2Client, rootFolderId: string): 
 			created_at: r[6] ?? '',
 			updated_at: r[7] ?? '',
 			last_built_at: r[8] ?? '',
-			app_owners: (r[9] ?? '').split(',').map((e: string) => e.trim()).filter(Boolean),
-			app_password: r[10] ?? '',
+			members_only: (r[10] ?? '') === 'true',
 			allowed_domains: (r[11] ?? '').split(',').map((e: string) => e.trim()).filter(Boolean),
 			spend_usd: parseFloat(r[12] ?? '0') || 0,
 			spend_limit_usd: parseFloat(r[13] ?? '0') || 0,

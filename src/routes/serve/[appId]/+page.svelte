@@ -1,9 +1,8 @@
 <script lang="ts">
 	import type { PageData } from './$types';
-	import type { ActionData } from './$types';
 	import ChatBubble from '$lib/components/ChatBubble.svelte';
 
-	let { data, form }: { data: PageData; form: ActionData } = $props();
+	let { data }: { data: PageData } = $props();
 
 	let iframeEl: HTMLIFrameElement | undefined = $state();
 
@@ -19,27 +18,11 @@
 </svelte:head>
 
 {#if !data.authed}
-	<!-- Standard app password login -->
 	<div class="login-wrapper">
 		<div class="login-card">
 			<h1>{data.app.name}</h1>
-			<p class="login-subtitle">This app is password protected.</p>
-
-			{#if form?.error}
-				<div class="login-error">{form.error}</div>
-			{/if}
-
-			<form method="POST" action="?/login" class="login-form">
-				<label>
-					<span>Email</span>
-					<input type="email" name="email" required autocomplete="email" />
-				</label>
-				<label>
-					<span>Password</span>
-					<input type="password" name="password" required autocomplete="current-password" />
-				</label>
-				<button type="submit" class="login-btn">Sign in</button>
-			</form>
+			<p class="login-subtitle">This app is for members only.</p>
+			<a href="/serve/{data.app.id}/login" class="login-btn">Sign in</a>
 		</div>
 	</div>
 
@@ -107,48 +90,6 @@
 		margin-bottom: 1.5rem;
 	}
 
-	.login-error {
-		background: #fef2f2;
-		border: 1px solid #fca5a5;
-		color: #b91c1c;
-		font-size: 0.875rem;
-		border-radius: 8px;
-		padding: 0.65rem 0.9rem;
-		margin-bottom: 1rem;
-	}
-
-	.login-form {
-		display: flex;
-		flex-direction: column;
-		gap: 1rem;
-	}
-
-	.login-form label {
-		display: flex;
-		flex-direction: column;
-		gap: 0.3rem;
-	}
-
-	.login-form label span {
-		font-size: 0.8rem;
-		font-weight: 500;
-		color: #374151;
-	}
-
-	.login-form input {
-		padding: 0.6rem 0.75rem;
-		border: 1px solid #d1d5db;
-		border-radius: 8px;
-		font-size: 0.9rem;
-		font-family: inherit;
-	}
-
-	.login-form input:focus {
-		outline: none;
-		border-color: #4f46e5;
-		box-shadow: 0 0 0 2px #e0e7ff;
-	}
-
 	.login-btn {
 		background: #4f46e5;
 		color: #fff;
@@ -159,6 +100,8 @@
 		font-weight: 600;
 		cursor: pointer;
 		margin-top: 0.25rem;
+		text-decoration: none;
+		display: inline-block;
 	}
 
 	.login-btn:hover {

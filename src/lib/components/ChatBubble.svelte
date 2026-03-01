@@ -174,6 +174,11 @@
 		showApiKeyInput = false;
 		tick().then(() => textarea?.focus());
 	}
+
+	async function logout() {
+		await fetch(`/api/apps/${appId}/users`, { method: 'DELETE' });
+		window.location.reload();
+	}
 </script>
 
 <!-- Floating button -->
@@ -191,7 +196,10 @@
 	<div class="panel">
 		<div class="panel-header">
 			<span>Edit this app</span>
-			<button class="close" onclick={() => (open = false)} aria-label="Close">✕</button>
+			<div class="header-actions">
+				<button class="logout-btn" onclick={logout}>Sign out</button>
+				<button class="close" onclick={() => (open = false)} aria-label="Close">✕</button>
+			</div>
 		</div>
 
 		<!-- Spend cutoff banner -->
@@ -242,6 +250,7 @@
 				<div class="empty-hint">
 					<p>Describe what you'd like to change. Claude will update the app for you.</p>
 					<p class="hint-sub">Examples: "Add a search bar", "Make it dark mode", "Show totals"</p>
+					<p class="hint-sub">Use "Sign out" in the header to log out of this app.</p>
 				</div>
 			{/if}
 			{#each history as msg}
@@ -348,6 +357,24 @@
 		background: #fafafa;
 		flex-shrink: 0;
 	}
+
+	.header-actions {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+
+	.logout-btn {
+		background: none;
+		border: none;
+		font-size: 0.75rem;
+		cursor: pointer;
+		color: #9ca3af;
+		padding: 0.15rem 0.35rem;
+		border-radius: 4px;
+	}
+
+	.logout-btn:hover { color: #b91c1c; background: #fef2f2; }
 
 	.close {
 		background: none;

@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
-import { resetMocks, seedApp } from '../helpers/seed';
-import { setRootSession, setAppToken } from '../helpers/auth';
+import { resetMocks, seedApp, seedMember } from '../helpers/seed';
+import { setRootSession, setUserToken } from '../helpers/auth';
 
 const ROOT_FOLDER = 'root-folder-2';
 const OWNER_EMAIL = 'owner@test.com';
@@ -27,9 +27,33 @@ test.describe.serial('RBAC role tests', () => {
 			databaseSheetId: 'rbac-db-1',
 			generatedCodeDocId: 'rbac-gen-1',
 			generatedCode: '<html><body><h1>RBAC App</h1></body></html>',
-			appPassword: 'hashed-pass',
-			appOwners: ['owner@test.com'],
+			membersOnly: true,
 			ownerEmail: OWNER_EMAIL
+		});
+		// Seed members for testing
+		await seedMember({
+			rootFolderId: ROOT_FOLDER,
+			appId: 'rbac-app-1',
+			databaseSheetId: 'rbac-db-1',
+			email: 'chatter@example.com',
+			role: 'owner',
+			canChat: true
+		});
+		await seedMember({
+			rootFolderId: ROOT_FOLDER,
+			appId: 'rbac-app-1',
+			databaseSheetId: 'rbac-db-1',
+			email: 'nochat@example.com',
+			role: 'owner',
+			canChat: false
+		});
+		await seedMember({
+			rootFolderId: ROOT_FOLDER,
+			appId: 'rbac-app-1',
+			databaseSheetId: 'rbac-db-1',
+			email: 'viewer@example.com',
+			role: 'member',
+			canChat: false
 		});
 	});
 
@@ -40,31 +64,30 @@ test.describe.serial('RBAC role tests', () => {
 		await expect(chatBtn).toBeVisible();
 	});
 
-	test('app-owner with can_chat=true sees chat bubble', async ({ page, context }) => {
-		await setAppToken(context, 'rbac-app-1', 'app-owner', true);
+	test('member with can_chat=true sees chat bubble', async ({ page, context }) => {
+		await setUserToken(context, 'rbac-app-1', 'user-1', 'chatter@example.com', 'owner', true);
 		await page.goto('/serve/rbac-app-1');
 		const chatBtn = page.getByLabel('Open edit chat');
 		await expect(chatBtn).toBeVisible();
 	});
 
-	test('app-owner with can_chat=false does NOT see chat bubble', async ({ page, context }) => {
-		await setAppToken(context, 'rbac-app-1', 'app-owner', false);
+	test('member with can_chat=false does NOT see chat bubble', async ({ page, context }) => {
+		await setUserToken(context, 'rbac-app-1', 'user-2', 'nochat@example.com', 'owner', false);
 		await page.goto('/serve/rbac-app-1');
 		const chatBtn = page.getByLabel('Open edit chat');
 		await expect(chatBtn).not.toBeVisible();
 	});
 
-	test('public user sees password form, not the app', async ({ page }) => {
+	test('unauthenticated user sees members-only card, not the app', async ({ page }) => {
 		await page.goto('/serve/rbac-app-1');
-		// Should show login form since app has a password
-		const passwordInput = page.locator('input[type="password"]');
-		await expect(passwordInput).toBeVisible();
+		// Should show members-only card with sign-in link
+		await expect(page.locator('text=This app is for members only')).toBeVisible();
 		const chatBtn = page.getByLabel('Open edit chat');
 		await expect(chatBtn).not.toBeVisible();
 	});
 
-	test('public role token does NOT see chat bubble', async ({ page, context }) => {
-		await setAppToken(context, 'rbac-app-1', 'public', false);
+	test('public member does NOT see chat bubble', async ({ page, context }) => {
+		await setUserToken(context, 'rbac-app-1', 'user-3', 'viewer@example.com', 'member', false);
 		await page.goto('/serve/rbac-app-1');
 		const chatBtn = page.getByLabel('Open edit chat');
 		await expect(chatBtn).not.toBeVisible();

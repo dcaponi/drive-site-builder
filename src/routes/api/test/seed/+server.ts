@@ -71,8 +71,7 @@ export const POST: RequestHandler = async ({ request }) => {
 			databaseSheetId,
 			generatedCodeDocId,
 			generatedCode,
-			appPassword,
-			appOwners,
+			membersOnly,
 			allowedDomains,
 			clientSlug,
 			appSlug,
@@ -106,7 +105,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		const APP_HEADERS = [
 			'id', 'name', 'folder_id', 'requirements_doc_id', 'database_sheet_id',
 			'generated_code_doc_id', 'created_at', 'updated_at', 'last_built_at',
-			'app_owners', 'app_password', 'allowed_domains', 'spend_usd', 'spend_limit_usd',
+			'_reserved', 'members_only', 'allowed_domains', 'spend_usd', 'spend_limit_usd',
 			'is_cutoff', 'client_slug', 'app_slug', 'is_home'
 		];
 
@@ -114,7 +113,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		const row = [
 			appId, appName, folderId, requirementsDocId ?? '', databaseSheetId ?? '',
 			generatedCodeDocId ?? '', now, now, generatedCodeDocId ? now : '',
-			(appOwners ?? []).join(','), appPassword ?? '',
+			'', membersOnly ? 'true' : 'false',
 			(allowedDomains ?? []).join(','), '0', '0', 'false',
 			clientSlug ?? '', appSlug ?? '', isHome ? 'true' : 'false'
 		];

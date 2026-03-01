@@ -53,8 +53,7 @@ export async function seedApp(opts: {
 	databaseSheetId?: string;
 	generatedCodeDocId?: string;
 	generatedCode?: string;
-	appPassword?: string;
-	appOwners?: string[];
+	membersOnly?: boolean;
 	allowedDomains?: string[];
 	ownerEmail?: string;
 	clientSlug?: string;

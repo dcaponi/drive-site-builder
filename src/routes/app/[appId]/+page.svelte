@@ -17,16 +17,12 @@
 	let logDiv: HTMLDivElement | undefined = $state();
 	let feedbacks = $state<ConversationFeedback[]>([...data.feedbacks]);
 
-	// Credentials state
-	let credOwners = $state((data.app.app_owners ?? []).join('\n'));
-	let credDomains = $state((data.app.allowed_domains ?? []).join('\n'));
-	let credPassword = $state('');
-	let credSaving = $state(false);
-	let credError = $state('');
-	let credSuccess = $state('');
-	let magicLink = $state('');
-	let magicLinkCopied = $state(false);
-	let credentialsActive = $state(!!(data.app.app_owners?.length));
+	// Access settings state
+	let membersOnly = $state(data.app.members_only ?? false);
+	let accessDomains = $state((data.app.allowed_domains ?? []).join('\n'));
+	let accessSaving = $state(false);
+	let accessError = $state('');
+	let accessSuccess = $state('');
 
 	// Spend control state
 	let spendLimit = $state(String(data.app.spend_limit_usd ?? 0));
@@ -153,72 +149,26 @@
 		}
 	}
 
-	async function saveCredentials() {
-		credSaving = true;
-		credError = '';
-		credSuccess = '';
-		magicLink = '';
-
+	async function saveAccessSettings() {
+		accessSaving = true;
+		accessError = '';
+		accessSuccess = '';
 		try {
-			const res = await fetch(`/api/apps/${data.app.id}/credentials`, {
-				method: 'PUT',
+			const res = await fetch(`/api/apps/${data.app.id}/access`, {
+				method: 'PATCH',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
-					owners: credOwners.split('\n').map((e) => e.trim()).filter(Boolean),
-					password: credPassword,
-					allowed_domains: credDomains.split('\n').map((d) => d.trim()).filter(Boolean)
+					members_only: membersOnly,
+					allowed_domains: accessDomains.split('\n').map((d) => d.trim()).filter(Boolean)
 				})
 			});
 			if (!res.ok) throw new Error(await res.text());
-			credSuccess = 'Credentials saved.';
-			credPassword = '';
-			credentialsActive = true;
-			// Auto-generate magic link
-			await generateMagicLink();
+			accessSuccess = 'Access settings saved.';
 		} catch (err) {
-			credError = err instanceof Error ? err.message : 'Failed to save';
+			accessError = err instanceof Error ? err.message : 'Failed to save';
 		} finally {
-			credSaving = false;
+			accessSaving = false;
 		}
-	}
-
-	async function clearCredentials() {
-		if (!confirm('Remove credentials? The app will be accessible to anyone with a Google account.')) return;
-		credSaving = true;
-		credError = '';
-		credSuccess = '';
-		magicLink = '';
-
-		try {
-			const res = await fetch(`/api/apps/${data.app.id}/credentials`, { method: 'DELETE' });
-			if (!res.ok) throw new Error(await res.text());
-			credOwners = '';
-			credPassword = '';
-			credentialsActive = false;
-			credSuccess = 'Credentials removed.';
-		} catch (err) {
-			credError = err instanceof Error ? err.message : 'Failed to clear';
-		} finally {
-			credSaving = false;
-		}
-	}
-
-	async function generateMagicLink() {
-		credError = '';
-		try {
-			const res = await fetch(`/api/apps/${data.app.id}/token`, { method: 'POST' });
-			if (!res.ok) throw new Error(await res.text());
-			const body = await res.json();
-			magicLink = body.magicLink;
-		} catch (err) {
-			credError = err instanceof Error ? err.message : 'Failed to generate link';
-		}
-	}
-
-	async function copyMagicLink() {
-		await navigator.clipboard.writeText(magicLink);
-		magicLinkCopied = true;
-		setTimeout(() => (magicLinkCopied = false), 2000);
 	}
 
 	async function saveSpend() {
@@ -341,69 +291,35 @@
 	</section>
 {/if}
 
-<!-- Access / Credentials -->
-<section class="card credentials-section">
-	<h2>Access Control</h2>
+<!-- Members & Access -->
+<section class="card members-section">
+	<h2>Members & Access <span class="badge">{members.length}</span></h2>
 
-	{#if credError}
-		<div class="banner error small">{credError}</div>
+	{#if accessError}
+		<div class="banner error small">{accessError}</div>
 	{/if}
-	{#if credSuccess}
-		<div class="banner success small">{credSuccess}</div>
+	{#if accessSuccess}
+		<div class="banner success small">{accessSuccess}</div>
 	{/if}
 
-	<p class="muted" style="margin-bottom:1rem;">
-		{#if credentialsActive}
-			This app requires a password.
-			App-owners who can edit via chat: <strong>{(data.app.app_owners ?? []).join(', ') || 'none'}</strong>
-		{:else}
-			No credentials set — anyone with Google access can view this app.
-		{/if}
-	</p>
-
-	<div class="cred-form">
-		<label class="cred-label">
-			App-owner emails <span class="cred-hint">(one per line — these users see the chat bubble)</span>
-			<textarea bind:value={credOwners} placeholder="alice@example.com&#10;bob@example.com" rows="3"></textarea>
+	<div class="access-settings">
+		<label class="members-only-toggle">
+			<input type="checkbox" bind:checked={membersOnly} />
+			<span>Members only</span>
+			<span class="cred-hint">— when enabled, only members and owners can access this app</span>
 		</label>
 		<label class="cred-label">
 			Allowed email domains <span class="cred-hint">(one per line — only these domains can sign up; leave blank to allow anyone)</span>
-			<textarea bind:value={credDomains} placeholder="company.com&#10;example.org" rows="2"></textarea>
-		</label>
-		<label class="cred-label">
-			Password
-			<input type="password" bind:value={credPassword} placeholder="Password" />
+			<textarea bind:value={accessDomains} placeholder="company.com&#10;example.org" rows="2"></textarea>
 		</label>
 		<div class="cred-actions">
-			<button class="btn-primary small" onclick={saveCredentials} disabled={credSaving || !credPassword}>
-				{credSaving ? 'Saving…' : 'Save credentials'}
+			<button class="btn-primary small" onclick={saveAccessSettings} disabled={accessSaving}>
+				{accessSaving ? 'Saving…' : 'Save access settings'}
 			</button>
-			{#if credentialsActive}
-				<button class="btn-ghost small" onclick={clearCredentials} disabled={credSaving}>Remove</button>
-			{/if}
 		</div>
 	</div>
 
-	{#if credentialsActive}
-		<div class="magic-link-area">
-			<p class="magic-label">Magic link <span class="badge-muted">anyone with this link can access</span></p>
-			{#if magicLink}
-				<div class="magic-link-row">
-					<input type="text" readonly value={magicLink} class="magic-input" />
-					<button class="btn-primary small" onclick={copyMagicLink}>
-						{magicLinkCopied ? 'Copied!' : 'Copy'}
-					</button>
-				</div>
-			{:else}
-				<button class="btn-outline small" onclick={generateMagicLink}>Generate magic link</button>
-			{/if}
-		</div>
-	{/if}
-</section>
-
-<!-- Members -->
-<section class="card members-section">
-	<h2>Members <span class="badge">{members.length}</span></h2>
+	<hr style="border:none;border-top:1px solid #e5e7eb;margin:1.25rem 0;" />
 
 	{#if memberError}
 		<div class="banner error small">{memberError}</div>
@@ -702,14 +618,25 @@
 		border: none;
 	}
 
-	/* Credentials section */
-	.credentials-section { margin-top: 1rem; margin-bottom: 1.5rem; }
-
-	.cred-form {
+	/* Access settings */
+	.access-settings {
 		display: flex;
 		flex-direction: column;
 		gap: 0.75rem;
+		margin-bottom: 0.5rem;
 	}
+
+	.members-only-toggle {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		font-size: 0.875rem;
+		font-weight: 500;
+		color: #374151;
+		cursor: pointer;
+	}
+
+	.members-only-toggle input[type='checkbox'] { width: 1rem; height: 1rem; cursor: pointer; }
 
 	.cred-label {
 		display: flex;
@@ -745,8 +672,6 @@
 
 	.cred-actions { display: flex; gap: 0.5rem; margin-top: 0.25rem; }
 
-	.magic-link-area { margin-top: 1.25rem; }
-
 	.magic-label {
 		font-size: 0.8rem;
 		font-weight: 500;
@@ -764,24 +689,6 @@
 		font-size: 0.72rem;
 		font-weight: 400;
 		padding: 0.1rem 0.5rem;
-	}
-
-	.magic-link-row {
-		display: flex;
-		gap: 0.5rem;
-		align-items: center;
-	}
-
-	.magic-input {
-		flex: 1;
-		padding: 0.45rem 0.65rem;
-		border: 1px solid #d1d5db;
-		border-radius: 7px;
-		font-size: 0.8rem;
-		font-family: monospace;
-		color: #4b5563;
-		background: #f9fafb;
-		min-width: 0;
 	}
 
 	/* Spend section */

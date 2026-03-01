@@ -29,6 +29,31 @@ test.describe.serial('Member can_chat permission', () => {
 			generatedCode: '<html><body><h1>Member Chat</h1></body></html>',
 			ownerEmail: OWNER_EMAIL
 		});
+		// Seed members so live lookup works
+		await seedMember({
+			rootFolderId: ROOT_FOLDER,
+			appId: 'mc-app-1',
+			databaseSheetId: 'mc-db-1',
+			email: 'chatter@example.com',
+			role: 'member',
+			canChat: true
+		});
+		await seedMember({
+			rootFolderId: ROOT_FOLDER,
+			appId: 'mc-app-1',
+			databaseSheetId: 'mc-db-1',
+			email: 'viewer@example.com',
+			role: 'member',
+			canChat: false
+		});
+		await seedMember({
+			rootFolderId: ROOT_FOLDER,
+			appId: 'mc-app-1',
+			databaseSheetId: 'mc-db-1',
+			email: 'owner-member@example.com',
+			role: 'owner',
+			canChat: true
+		});
 	});
 
 	test('member with can_chat=true sees chat bubble', async ({ page, context }) => {

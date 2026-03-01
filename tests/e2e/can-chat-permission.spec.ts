@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
-import { resetMocks, seedApp } from '../helpers/seed';
-import { setAppToken } from '../helpers/auth';
+import { resetMocks, seedApp, seedMember } from '../helpers/seed';
+import { setUserToken } from '../helpers/auth';
 
 const ROOT_FOLDER = 'root-folder-3';
 const OWNER_EMAIL = 'owner@test.com';
@@ -27,26 +27,49 @@ test.describe.serial('can_chat permission toggle', () => {
 			databaseSheetId: 'cp-db',
 			generatedCodeDocId: 'cp-gen',
 			generatedCode: '<html><body><h1>Chat Perm</h1></body></html>',
-			appPassword: 'hashed-pass',
-			appOwners: ['owner@test.com'],
 			ownerEmail: OWNER_EMAIL
+		});
+		// Seed members for testing
+		await seedMember({
+			rootFolderId: ROOT_FOLDER,
+			appId: 'chat-perm-app',
+			databaseSheetId: 'cp-db',
+			email: 'chatter@example.com',
+			role: 'owner',
+			canChat: true
+		});
+		await seedMember({
+			rootFolderId: ROOT_FOLDER,
+			appId: 'chat-perm-app',
+			databaseSheetId: 'cp-db',
+			email: 'nochat@example.com',
+			role: 'owner',
+			canChat: false
+		});
+		await seedMember({
+			rootFolderId: ROOT_FOLDER,
+			appId: 'chat-perm-app',
+			databaseSheetId: 'cp-db',
+			email: 'viewer@example.com',
+			role: 'member',
+			canChat: false
 		});
 	});
 
-	test('app-owner token with can_chat=true shows chat bubble', async ({ page, context }) => {
-		await setAppToken(context, 'chat-perm-app', 'app-owner', true);
+	test('member with can_chat=true shows chat bubble', async ({ page, context }) => {
+		await setUserToken(context, 'chat-perm-app', 'user-1', 'chatter@example.com', 'owner', true);
 		await page.goto('/serve/chat-perm-app');
 		await expect(page.getByLabel('Open edit chat')).toBeVisible();
 	});
 
-	test('app-owner token with can_chat=false hides chat bubble', async ({ page, context }) => {
-		await setAppToken(context, 'chat-perm-app', 'app-owner', false);
+	test('member with can_chat=false hides chat bubble', async ({ page, context }) => {
+		await setUserToken(context, 'chat-perm-app', 'user-2', 'nochat@example.com', 'owner', false);
 		await page.goto('/serve/chat-perm-app');
 		await expect(page.getByLabel('Open edit chat')).not.toBeVisible();
 	});
 
-	test('public token never shows chat bubble', async ({ page, context }) => {
-		await setAppToken(context, 'chat-perm-app', 'public', false);
+	test('public member never shows chat bubble', async ({ page, context }) => {
+		await setUserToken(context, 'chat-perm-app', 'user-3', 'viewer@example.com', 'member', false);
 		await page.goto('/serve/chat-perm-app');
 		await expect(page.getByLabel('Open edit chat')).not.toBeVisible();
 	});

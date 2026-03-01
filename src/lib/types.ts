@@ -8,9 +8,8 @@ export interface AppConfig {
 	created_at: string;
 	updated_at: string;
 	last_built_at: string;
-	app_owners: string[];
+	members_only: boolean;
 	allowed_domains: string[];
-	app_password: string;
 	spend_usd: number;
 	spend_limit_usd: number;
 	is_cutoff: boolean;
