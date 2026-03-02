@@ -261,7 +261,8 @@ export async function writeGeneratedCode(
 				});
 				return existingDocId;
 			} catch {
-				// File missing or inaccessible — fall through to create
+				// File missing or inaccessible — delete orphan before creating new
+				try { await drive.files.delete({ fileId: existingDocId, ...DRIVE_PARAMS }); } catch { /* ignore */ }
 			}
 		}
 	}

@@ -22,7 +22,7 @@ import {
 	classifyIntent,
 	chatWithTools
 } from '$lib/server/anthropic.js';
-import { parseEditBlocks, applyEditBlocks, isFullHtml, stripDiffMarkers } from '$lib/server/editDiff.js';
+import { parseEditBlocks, applyEditBlocks, isFullHtml, stripDiffMarkers, stripCodeFences } from '$lib/server/editDiff.js';
 import { verifyUserToken, userCookieName } from '$lib/server/userAuth.js';
 import { findAppUser } from '$lib/server/sheets.js';
 import { createJob, updateJob } from '$lib/server/jobQueue.js';
@@ -183,6 +183,7 @@ export const POST: RequestHandler = async ({ params, request, locals, url, cooki
 			)) {
 				diffOutput += chunk;
 			}
+			diffOutput = stripCodeFences(diffOutput);
 
 			let finalCode: string | null = null;
 
@@ -207,6 +208,7 @@ export const POST: RequestHandler = async ({ params, request, locals, url, cooki
 					)) {
 						finalCode += chunk;
 					}
+					finalCode = stripCodeFences(finalCode);
 				}
 			}
 

@@ -31,8 +31,19 @@ export function parseEditBlocks(text: string): EditBlock[] {
 /**
  * Returns true if the text looks like a full HTML document rather than a diff.
  */
+/**
+ * Strip markdown code fences (```html ... ```) that models sometimes emit
+ * despite being told not to. Handles optional language tag and leading/trailing whitespace.
+ */
+export function stripCodeFences(text: string): string {
+	return text.replace(/^```[a-z]*\s*\n?/i, '').replace(/\n?```\s*$/i, '');
+}
+
+/**
+ * Returns true if the text looks like a full HTML document rather than a diff.
+ */
 export function isFullHtml(text: string): boolean {
-	const t = text.trimStart().toLowerCase();
+	const t = stripCodeFences(text).trimStart().toLowerCase();
 	return t.startsWith('<!doctype') || t.startsWith('<html');
 }
 

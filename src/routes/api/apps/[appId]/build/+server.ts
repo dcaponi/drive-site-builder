@@ -6,6 +6,7 @@ import { readRequirementsDoc, readGeneratedCode, writeGeneratedCode } from '$lib
 import { generateApp, continueApp, isTruncated, stripTruncationMarker } from '$lib/server/anthropic.js';
 import { error, json } from '@sveltejs/kit';
 import { createJob, updateJob } from '$lib/server/jobQueue.js';
+import { stripCodeFences } from '$lib/server/editDiff.js';
 
 export const POST: RequestHandler = async ({ params, locals, url }) => {
 	const user = locals.user as SessionUser;
@@ -41,6 +42,7 @@ export const POST: RequestHandler = async ({ params, locals, url }) => {
 				for await (const chunk of continueApp(partialCode, requirements, schema, url.origin, appId, uxSummaries, trackCost)) {
 					continuation += chunk;
 				}
+				continuation = stripCodeFences(continuation);
 
 				updateJob(jobId, { status: 'running', progress: 'Saving to Drive…' });
 
@@ -57,6 +59,7 @@ export const POST: RequestHandler = async ({ params, locals, url }) => {
 				for await (const chunk of generateApp(requirements, schema, url.origin, appId, uxSummaries, trackCost)) {
 					fullCode += chunk;
 				}
+				fullCode = stripCodeFences(fullCode);
 
 				updateJob(jobId, { status: 'running', progress: 'Saving to Drive…' });
 
