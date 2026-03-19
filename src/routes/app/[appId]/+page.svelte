@@ -213,7 +213,7 @@
 		{/if}
 	</div>
 	<div class="actions">
-		{#if data.app.generated_code_doc_id}
+		{#if data.hasCode}
 			{#if data.app.is_home}
 				<a href="/" target="_blank" class="btn-outline">Open App ↗</a>
 			{:else if data.app.client_slug && data.app.app_slug}
@@ -223,7 +223,7 @@
 			{/if}
 		{/if}
 		<button class="btn-primary" onclick={triggerBuild} disabled={building}>
-			{building ? 'Building…' : data.app.generated_code_doc_id ? 'Rebuild' : 'Build App'}
+			{building ? 'Building…' : data.hasCode ? 'Rebuild' : 'Build App'}
 		</button>
 	</div>
 </div>
@@ -331,7 +331,7 @@
 {/if}
 
 <!-- Live Preview (iframe) -->
-{#if data.app.generated_code_doc_id}
+{#if data.hasCode}
 	<section class="preview-section">
 		<h2>Live Preview</h2>
 		<div class="iframe-wrapper">

@@ -3,7 +3,7 @@ import type { SessionUser } from '$lib/server/auth.js';
 import { error, fail } from '@sveltejs/kit';
 import { getAuthedClient } from '$lib/server/auth.js';
 import { getAppById, getAppSchema, getAppFeedbacks, setHomeApp, listAppUsers } from '$lib/server/sheets.js';
-import { readRequirementsDoc, listFolderAssets, listFolderScripts } from '$lib/server/drive.js';
+import { readRequirementsDoc, readGeneratedCode, listFolderAssets, listFolderScripts } from '$lib/server/drive.js';
 
 export const load: PageServerLoad = async ({ locals, params, url }) => {
 	const user = locals.user as SessionUser;
@@ -13,13 +13,16 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	const app = await getAppById(auth, rootFolderId, params.appId!);
 	if (!app) throw error(404, 'App not found');
 
-	const [requirements, schema, feedbacks, members, assets, scripts] = await Promise.all([
+	const [requirements, schema, feedbacks, members, assets, scripts, hasCode] = await Promise.all([
 		readRequirementsDoc(auth, app.requirements_doc_id).catch(() => ''),
 		getAppSchema(auth, app.database_sheet_id).catch(() => []),
 		getAppFeedbacks(auth, rootFolderId, params.appId!).catch(() => []),
 		listAppUsers(auth, rootFolderId, params.appId!).catch(() => []),
 		listFolderAssets(auth, app.folder_id).catch(() => []),
-		listFolderScripts(auth, app.folder_id).catch(() => [])
+		listFolderScripts(auth, app.folder_id).catch(() => []),
+		app.generated_code_doc_id
+			? readGeneratedCode(auth, app.generated_code_doc_id).then((c) => c.trim().length > 0).catch(() => false)
+			: Promise.resolve(false)
 	]);
 
 	// Sanitize members — omit password_hash, add has_password
@@ -31,7 +34,8 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	return {
 		app, requirements, schema, feedbacks, members: sanitizedMembers,
 		assets,
-		scripts: scripts.map(({ id, name }) => ({ id, name }))
+		scripts: scripts.map(({ id, name }) => ({ id, name })),
+		hasCode
 	};
 };
 

@@ -51,16 +51,33 @@ export const GET: RequestHandler = async ({ params, locals, url, cookies }) => {
 	if (!app.generated_code_doc_id) {
 		return new Response(
 			`<!doctype html><html><body style="font-family:sans-serif;padding:2rem;color:#6b7280"><h2>Not built yet</h2><p>Go back and click "Build App".</p></body></html>`,
-			{ headers: { 'Content-Type': 'text/html' } }
+			{ headers: { 'Content-Type': 'text/html', 'Cache-Control': 'no-cache' } }
 		);
 	}
 
-	const code = await readGeneratedCode(auth, app.generated_code_doc_id);
+	let code: string;
+	try {
+		code = await readGeneratedCode(auth, app.generated_code_doc_id);
+	} catch {
+		return new Response(
+			`<!doctype html><html><body style="font-family:sans-serif;padding:2rem;color:#6b7280"><h2>App code not found</h2><p>The generated code file may have been deleted. Try rebuilding the app.</p></body></html>`,
+			{ headers: { 'Content-Type': 'text/html', 'Cache-Control': 'no-cache' } }
+		);
+	}
+
+	if (!code.trim()) {
+		return new Response(
+			`<!doctype html><html><body style="font-family:sans-serif;padding:2rem;color:#6b7280"><h2>App is empty</h2><p>The generated code file is empty. Try rebuilding the app.</p></body></html>`,
+			{ headers: { 'Content-Type': 'text/html', 'Cache-Control': 'no-cache' } }
+		);
+	}
+
 	const html = await minifyHtml(code);
 
 	return new Response(html, {
 		headers: {
 			'Content-Type': 'text/html; charset=utf-8',
+			'Cache-Control': 'no-cache',
 			'X-Frame-Options': 'SAMEORIGIN'
 		}
 	});
