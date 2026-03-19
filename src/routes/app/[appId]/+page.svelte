@@ -30,6 +30,9 @@
 	let spendError = $state('');
 	let spendSuccess = $state('');
 
+	// Schema tab state
+	let activeSchemaTab = $state(data.schema.length > 0 ? data.schema[0].name : '');
+
 	// Members state
 	type MemberItem = { id: string; email: string; role: 'owner' | 'member'; can_chat: boolean; has_password: boolean; created_at: string };
 	let members = $state<MemberItem[]>([...data.members]);
@@ -274,19 +277,58 @@
 		{#if data.schema.length === 0}
 			<p class="muted">No tables found in the database sheet.</p>
 		{:else}
-			{#each data.schema as table}
-				<div class="table-schema">
-					<strong>{table.name}</strong>
-					<ul>
-						{#each table.columns as col}
-							<li><code>{col.name}</code> <span class="type">{col.type}</span></li>
-						{/each}
-					</ul>
-				</div>
-			{/each}
+			<div class="schema-tabs">
+				{#each data.schema as table}
+					<button
+						class="schema-tab"
+						class:active={activeSchemaTab === table.name}
+						onclick={() => activeSchemaTab = table.name}
+					>{table.name}</button>
+				{/each}
+			</div>
+			<div class="schema-panel">
+				{#each data.schema as table}
+					{#if activeSchemaTab === table.name}
+						<ul class="schema-col-list">
+							{#each table.columns as col}
+								<li><code>{col.name}</code> <span class="type">{col.type}</span></li>
+							{/each}
+						</ul>
+					{/if}
+				{/each}
+			</div>
 		{/if}
 	</section>
 </div>
+
+<!-- Assets & Scripts -->
+{#if data.assets.length > 0 || data.scripts.length > 0}
+<div class="two-col">
+	{#if data.scripts.length > 0}
+		<section class="card">
+			<h2>Injected Scripts <span class="badge">{data.scripts.length}</span></h2>
+			<ul class="file-list">
+				{#each data.scripts as script}
+					<li><code>{script.name}</code></li>
+				{/each}
+			</ul>
+		</section>
+	{/if}
+	{#if data.assets.length > 0}
+		<section class="card">
+			<h2>Included Assets <span class="badge">{data.assets.length}</span></h2>
+			<ul class="file-list">
+				{#each data.assets as asset}
+					<li>
+						<code>{asset.name}</code>
+						<span class="type">{asset.mimeType}</span>
+					</li>
+				{/each}
+			</ul>
+		</section>
+	{/if}
+</div>
+{/if}
 
 <!-- Live Preview (iframe) -->
 {#if data.app.generated_code_doc_id}
@@ -608,12 +650,66 @@
 		font-family: inherit;
 	}
 
-	.table-schema { margin-bottom: 1rem; }
-	.table-schema strong { font-size: 0.875rem; }
-	.table-schema ul { margin-top: 0.35rem; padding-left: 1rem; list-style: none; }
-	.table-schema li { font-size: 0.8rem; color: #6b7280; margin-bottom: 0.15rem; }
-	.table-schema code { color: #1d4ed8; font-size: 0.8rem; }
-	.table-schema .type { color: #9ca3af; margin-left: 0.4rem; }
+	.schema-tabs {
+		display: flex;
+		gap: 0;
+		border-bottom: 2px solid #e5e7eb;
+		margin-bottom: 0;
+		overflow-x: auto;
+	}
+
+	.schema-tab {
+		padding: 0.4rem 0.85rem;
+		font-size: 0.8rem;
+		font-weight: 500;
+		color: #6b7280;
+		background: none;
+		border: none;
+		border-bottom: 2px solid transparent;
+		margin-bottom: -2px;
+		cursor: pointer;
+		white-space: nowrap;
+	}
+
+	.schema-tab:hover { color: #374151; }
+	.schema-tab.active { color: #4f46e5; border-bottom-color: #4f46e5; }
+
+	.schema-panel {
+		max-height: 280px;
+		overflow-y: auto;
+		padding-top: 0.5rem;
+	}
+
+	.schema-col-list {
+		padding-left: 1rem;
+		list-style: none;
+		margin: 0;
+	}
+
+	.schema-col-list li { font-size: 0.8rem; color: #6b7280; margin-bottom: 0.15rem; }
+	.schema-col-list code { color: #1d4ed8; font-size: 0.8rem; }
+	.schema-col-list .type { color: #9ca3af; margin-left: 0.4rem; }
+
+	.file-list {
+		list-style: none;
+		padding: 0;
+		margin: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 0.35rem;
+	}
+
+	.file-list li {
+		font-size: 0.8rem;
+		color: #374151;
+		padding: 0.35rem 0.5rem;
+		background: #f9fafb;
+		border: 1px solid #f3f4f6;
+		border-radius: 6px;
+	}
+
+	.file-list code { color: #1d4ed8; font-size: 0.8rem; }
+	.file-list .type { color: #9ca3af; margin-left: 0.5rem; font-size: 0.75rem; }
 
 	.muted { font-size: 0.875rem; color: #9ca3af; }
 
