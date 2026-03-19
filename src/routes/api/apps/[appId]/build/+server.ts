@@ -2,7 +2,7 @@ import type { RequestHandler } from '@sveltejs/kit';
 import type { SessionUser } from '$lib/server/auth.js';
 import { getAuthedClient } from '$lib/server/auth.js';
 import { getAppById, getAppSchema, getConversationSummaries, addAppSpend } from '$lib/server/sheets.js';
-import { readRequirementsDoc, readGeneratedCode, writeGeneratedCode } from '$lib/server/drive.js';
+import { readRequirementsDoc, readGeneratedCode, writeGeneratedCode, listFolderAssets } from '$lib/server/drive.js';
 import { generateApp, continueApp, isTruncated, stripTruncationMarker } from '$lib/server/anthropic.js';
 import { error, json } from '@sveltejs/kit';
 import { createJob, updateJob } from '$lib/server/jobQueue.js';
@@ -17,11 +17,12 @@ export const POST: RequestHandler = async ({ params, locals, url }) => {
 	const app = await getAppById(auth, rootFolderId, appId);
 	if (!app) throw error(404, 'App not found');
 
-	const [requirements, schema, uxSummaries, existingCode] = await Promise.all([
+	const [requirements, schema, uxSummaries, existingCode, assets] = await Promise.all([
 		readRequirementsDoc(auth, app.requirements_doc_id),
 		getAppSchema(auth, app.database_sheet_id),
 		getConversationSummaries(auth, rootFolderId, appId),
-		app.generated_code_doc_id ? readGeneratedCode(auth, app.generated_code_doc_id) : Promise.resolve('')
+		app.generated_code_doc_id ? readGeneratedCode(auth, app.generated_code_doc_id) : Promise.resolve(''),
+		listFolderAssets(auth, app.folder_id)
 	]);
 
 	const shouldContinue = isTruncated(existingCode);
@@ -39,7 +40,7 @@ export const POST: RequestHandler = async ({ params, locals, url }) => {
 
 				updateJob(jobId, { status: 'running', progress: 'Continuing previous build…' });
 
-				for await (const chunk of continueApp(partialCode, requirements, schema, url.origin, appId, uxSummaries, trackCost)) {
+				for await (const chunk of continueApp(partialCode, requirements, schema, url.origin, appId, uxSummaries, trackCost, assets)) {
 					continuation += chunk;
 				}
 				continuation = stripCodeFences(continuation);
@@ -56,7 +57,7 @@ export const POST: RequestHandler = async ({ params, locals, url }) => {
 
 				updateJob(jobId, { status: 'running', progress: 'Generating code…' });
 
-				for await (const chunk of generateApp(requirements, schema, url.origin, appId, uxSummaries, trackCost)) {
+				for await (const chunk of generateApp(requirements, schema, url.origin, appId, uxSummaries, trackCost, assets)) {
 					fullCode += chunk;
 				}
 				fullCode = stripCodeFences(fullCode);

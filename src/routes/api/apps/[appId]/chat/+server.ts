@@ -13,7 +13,8 @@ import {
 	readRequirementsDoc,
 	readGeneratedCode,
 	writeGeneratedCode,
-	appendToRequirementsDoc
+	appendToRequirementsDoc,
+	listFolderAssets
 } from '$lib/server/drive.js';
 import {
 	generateEditDiff,
@@ -157,11 +158,12 @@ export const POST: RequestHandler = async ({ params, request, locals, url, cooki
 		try {
 			updateJob(jobId, { status: 'running', progress: 'Loading app…' });
 
-			const [requirements, schema, currentCode, uxSummaries] = await Promise.all([
+			const [requirements, schema, currentCode, uxSummaries, assets] = await Promise.all([
 				readRequirementsDoc(auth, app.requirements_doc_id),
 				getAppSchema(auth, app.database_sheet_id),
 				readGeneratedCode(auth, app.generated_code_doc_id).catch(() => ''),
-				getConversationSummaries(auth, rootFolderId, appId).catch(() => [] as string[])
+				getConversationSummaries(auth, rootFolderId, appId).catch(() => [] as string[]),
+				listFolderAssets(auth, app.folder_id)
 			]);
 
 			const now = new Date().toISOString();
@@ -179,7 +181,7 @@ export const POST: RequestHandler = async ({ params, request, locals, url, cooki
 			updateJob(jobId, { progress: 'Generating diff…' });
 			let diffOutput = '';
 			for await (const chunk of generateEditDiff(
-				currentCode, editRequest, requirements, schema, url.origin, appId, uxSummaries, trackCost
+				currentCode, editRequest, requirements, schema, url.origin, appId, uxSummaries, trackCost, assets
 			)) {
 				diffOutput += chunk;
 			}
@@ -204,7 +206,7 @@ export const POST: RequestHandler = async ({ params, request, locals, url, cooki
 					finalCode = stripDiffMarkers(diffOutput);
 				} else {
 					for await (const chunk of editApp(
-						currentCode, editRequest, requirements, schema, url.origin, appId, uxSummaries, trackCost
+						currentCode, editRequest, requirements, schema, url.origin, appId, uxSummaries, trackCost, assets
 					)) {
 						finalCode += chunk;
 					}

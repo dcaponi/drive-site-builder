@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { env } from '$env/dynamic/private';
-import type { TableSchema } from '../types.js';
+import type { TableSchema, AssetInfo } from '../types.js';
 
 let _client: Anthropic | null = null;
 
@@ -43,12 +43,34 @@ function uxLessonsBlock(summaries: string[]): string {
 	return `\nUX lessons learned from past user feedback (apply these when generating the UI):\n${lessons}\n`;
 }
 
+function assetsBlock(assets: AssetInfo[], apiBase: string, appId: string): string {
+	if (!assets.length) return '';
+	const lines = assets.map(
+		(a) => `  - "${a.name}" → ${apiBase}/api/apps/${appId}/assets/${a.id}`
+	);
+	return `\nCUSTOM ASSETS:
+The app owner has uploaded image assets to the project folder. Use these in the app where they
+make sense (e.g. logos, hero images, backgrounds, icons, illustrations). Reference them via their
+URL — they are served from the same origin.
+
+Available assets:
+${lines.join('\n')}
+
+Rules for assets:
+- Use <img> tags with the full URL path (starting with /api/apps/${appId}/assets/).
+- Always include descriptive alt text derived from the file name.
+- Use assets where they naturally fit the requirements — don't force every image in if it doesn't make sense.
+- You may use CSS background-image with url() for decorative/background use.
+- Assets are served with proper caching headers, so no need to worry about performance.\n`;
+}
+
 function buildSystemPrompt(
 	requirements: string,
 	tables: TableSchema[],
 	apiBase: string,
 	appId: string,
-	uxSummaries: string[]
+	uxSummaries: string[],
+	assets: AssetInfo[] = []
 ): string {
 	return `You are an expert full-stack web developer. Your job is to generate a complete, single-file HTML web application.
 
@@ -67,7 +89,7 @@ Available endpoints for each table:
   GET    /api/crud/${appId}/{table}/{id}  → { data: record }
   PUT    /api/crud/${appId}/{table}/{id}  → { data: record }   body: JSON object (partial)
   DELETE /api/crud/${appId}/{table}/{id}  → { success: true }
-${uxLessonsBlock(uxSummaries)}
+${uxLessonsBlock(uxSummaries)}${assetsBlock(assets, apiBase, appId)}
 USER AUTH API (if app has user system):
   POST   /api/apps/${appId}/users  (action: signup)  body: { email, password }  → 200 { userId, email } or 401
   POST   /api/apps/${appId}/users  (action: login)   body: { email, password }  → 200 { userId, email } or 401
@@ -107,10 +129,11 @@ export async function* generateApp(
 	apiBase: string,
 	appId: string,
 	uxSummaries: string[],
-	onCost?: (cost: number) => void
+	onCost?: (cost: number) => void,
+	assets: AssetInfo[] = []
 ): AsyncGenerator<string> {
 	const client = getClient();
-	const system = buildSystemPrompt(requirements, tables, apiBase, appId, uxSummaries);
+	const system = buildSystemPrompt(requirements, tables, apiBase, appId, uxSummaries, assets);
 
 	const stream = client.messages.stream({
 		model: INITIAL_MODEL,
@@ -162,10 +185,11 @@ export async function* continueApp(
 	apiBase: string,
 	appId: string,
 	uxSummaries: string[],
-	onCost?: (cost: number) => void
+	onCost?: (cost: number) => void,
+	assets: AssetInfo[] = []
 ): AsyncGenerator<string> {
 	const client = getClient();
-	const system = buildSystemPrompt(requirements, tables, apiBase, appId, uxSummaries);
+	const system = buildSystemPrompt(requirements, tables, apiBase, appId, uxSummaries, assets);
 	const clean = stripTruncationMarker(partialCode);
 
 	const stream = client.messages.stream({
@@ -228,10 +252,11 @@ export async function* generateEditDiff(
 	apiBase: string,
 	appId: string,
 	uxSummaries: string[],
-	onCost?: (cost: number) => void
+	onCost?: (cost: number) => void,
+	assets: AssetInfo[] = []
 ): AsyncGenerator<string> {
 	const client = getClient();
-	const system = buildSystemPrompt(requirements, tables, apiBase, appId, uxSummaries) + DIFF_SYSTEM_SUFFIX;
+	const system = buildSystemPrompt(requirements, tables, apiBase, appId, uxSummaries, assets) + DIFF_SYSTEM_SUFFIX;
 
 	const stream = client.messages.stream({
 		model: EDIT_MODEL,
@@ -268,10 +293,11 @@ export async function* editApp(
 	apiBase: string,
 	appId: string,
 	uxSummaries: string[],
-	onCost?: (cost: number) => void
+	onCost?: (cost: number) => void,
+	assets: AssetInfo[] = []
 ): AsyncGenerator<string> {
 	const client = getClient();
-	const system = buildSystemPrompt(requirements, tables, apiBase, appId, uxSummaries);
+	const system = buildSystemPrompt(requirements, tables, apiBase, appId, uxSummaries, assets);
 
 	const stream = client.messages.stream({
 		model: EDIT_MODEL,

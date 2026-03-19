@@ -1,6 +1,6 @@
 import type { OAuth2Client } from 'google-auth-library';
 import { getDrive, getDocs } from './google.js';
-import type { AppConfig } from '../types.js';
+import type { AppConfig, AssetInfo } from '../types.js';
 import { getConfigSheet, updateAppInConfig, addAppToConfig } from './sheets.js';
 import { v4 as uuidv4 } from 'uuid';
 import { env } from '$env/dynamic/private';
@@ -390,6 +390,54 @@ export async function createAppScaffold(
 
 	// 4. Register and return AppConfig
 	return registerApp(auth, rootFolderId, folderId, name, clientSlug ?? '', toSlug(name));
+}
+
+// ─── List image/media assets in an app folder ─────────────────────────────────
+
+const IMAGE_MIME_TYPES = [
+	'image/png',
+	'image/jpeg',
+	'image/gif',
+	'image/svg+xml',
+	'image/webp',
+	'image/bmp',
+	'image/x-icon'
+];
+
+export async function listFolderAssets(
+	auth: OAuth2Client,
+	folderId: string
+): Promise<AssetInfo[]> {
+	const drive = getDrive(auth);
+	const mimeFilter = IMAGE_MIME_TYPES.map((m) => `mimeType = '${m}'`).join(' or ');
+	const res = await drive.files.list({
+		q: `'${folderId}' in parents and (${mimeFilter}) and trashed = false`,
+		fields: 'files(id,name,mimeType)',
+		orderBy: 'name',
+		...DRIVE_PARAMS
+	});
+	return (res.data.files ?? []).map((f) => ({
+		id: f.id!,
+		name: f.name!,
+		mimeType: f.mimeType!
+	}));
+}
+
+// ─── Download a file's binary content from Drive ──────────────────────────────
+
+export async function downloadFileContent(
+	auth: OAuth2Client,
+	fileId: string
+): Promise<{ data: Buffer; mimeType: string }> {
+	const drive = getDrive(auth);
+	const meta = await drive.files.get({ fileId, fields: 'mimeType', ...DRIVE_PARAMS });
+	const mimeType = meta.data.mimeType ?? 'application/octet-stream';
+
+	const res = await drive.files.get(
+		{ fileId, alt: 'media', ...DRIVE_PARAMS },
+		{ responseType: 'arraybuffer' }
+	);
+	return { data: Buffer.from(res.data as ArrayBuffer), mimeType };
 }
 
 // ─── Append changelog entry to requirements doc ───────────────────────────────

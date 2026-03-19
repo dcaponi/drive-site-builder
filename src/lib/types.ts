@@ -42,6 +42,12 @@ export interface Conversation {
 	created_at: string;
 }
 
+export interface AssetInfo {
+	id: string;
+	name: string;
+	mimeType: string;
+}
+
 export interface BuildResult {
 	success: boolean;
 	code?: string;
