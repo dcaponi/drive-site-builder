@@ -167,6 +167,19 @@ export function registerSlug(
 	persistRegistry();
 }
 
+export function unregisterApp(appId: string): void {
+	loadFromDisk();
+	_appRegistry.delete(appId);
+	persistRegistry();
+}
+
+export function unregisterSlug(clientSlug: string, appSlug: string): void {
+	if (!clientSlug || !appSlug) return;
+	loadFromDisk();
+	_slugRegistry.delete(`${clientSlug}/${appSlug}`);
+	persistRegistry();
+}
+
 export function lookupApp(
 	appId: string
 ): { ownerEmail: string; rootFolderId: string } | null {

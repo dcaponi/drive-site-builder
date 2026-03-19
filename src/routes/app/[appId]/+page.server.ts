@@ -1,8 +1,9 @@
 import type { PageServerLoad, Actions } from './$types';
 import type { SessionUser } from '$lib/server/auth.js';
-import { error, fail } from '@sveltejs/kit';
+import { error, fail, redirect } from '@sveltejs/kit';
 import { getAuthedClient } from '$lib/server/auth.js';
-import { getAppById, getAppSchema, getAppFeedbacks, setHomeApp, listAppUsers } from '$lib/server/sheets.js';
+import { unregisterApp, unregisterSlug } from '$lib/server/rootAuth.js';
+import { getAppById, getAppSchema, getAppFeedbacks, setHomeApp, listAppUsers, deleteAppFromConfig } from '$lib/server/sheets.js';
 import { readRequirementsDoc, readGeneratedCode, listFolderAssets, listFolderScripts } from '$lib/server/drive.js';
 
 export const load: PageServerLoad = async ({ locals, params, url }) => {
@@ -51,5 +52,25 @@ export const actions: Actions = {
 		} catch (err) {
 			return fail(400, { error: err instanceof Error ? err.message : 'Failed to set home app' });
 		}
+	},
+
+	deleteApp: async ({ locals, params, url }) => {
+		const user = locals.user as SessionUser;
+		const auth = getAuthedClient(user, url.origin);
+		const rootFolderId = user.root_folder_id!;
+		const appId = params.appId!;
+
+		try {
+			const app = await getAppById(auth, rootFolderId, appId);
+			await deleteAppFromConfig(auth, rootFolderId, appId);
+			unregisterApp(appId);
+			if (app?.client_slug && app?.app_slug) {
+				unregisterSlug(app.client_slug, app.app_slug);
+			}
+		} catch (err) {
+			return fail(400, { error: err instanceof Error ? err.message : 'Failed to delete app' });
+		}
+
+		redirect(303, '/dashboard');
 	}
 };

@@ -225,6 +225,9 @@
 		<button class="btn-primary" onclick={triggerBuild} disabled={building}>
 			{building ? 'Building…' : data.hasCode ? 'Rebuild' : 'Build App'}
 		</button>
+		<form method="POST" action="?/deleteApp" use:enhance onsubmit={(e) => { if (!confirm('Delete this app? The Google Drive folder will be kept.')) e.preventDefault(); }}>
+			<button type="submit" class="btn-danger">Delete App</button>
+		</form>
 	</div>
 </div>
 
@@ -568,6 +571,19 @@
 
 	.btn-ghost.small { padding: 0.45rem 0.9rem; font-size: 0.825rem; }
 	.btn-ghost:hover { background: #f9fafb; }
+
+	.btn-danger {
+		padding: 0.55rem 1.1rem;
+		border-radius: 8px;
+		font-size: 0.875rem;
+		font-weight: 500;
+		cursor: pointer;
+		border: 1px solid #fca5a5;
+		background: #fff;
+		color: #dc2626;
+	}
+
+	.btn-danger:hover { background: #fef2f2; }
 
 	/* Public URL bar */
 	.public-url-bar {

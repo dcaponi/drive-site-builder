@@ -250,6 +250,49 @@ export async function updateAppInConfig(
 	});
 }
 
+export async function deleteAppFromConfig(
+	auth: OAuth2Client,
+	rootFolderId: string,
+	appId: string
+): Promise<boolean> {
+	const sheetId = await getConfigSheetId(auth, rootFolderId);
+	const sheets = getSheets(auth);
+
+	// Find the numeric tab ID for 'apps'
+	const meta = await sheets.spreadsheets.get({ spreadsheetId: sheetId });
+	const appsSheet = meta.data.sheets?.find((s) => s.properties?.title === 'apps');
+	if (!appsSheet?.properties) return false;
+	const gid = appsSheet.properties.sheetId!;
+
+	// Find which row has this app ID
+	const res = await sheets.spreadsheets.values.get({
+		spreadsheetId: sheetId,
+		range: 'apps!A:A'
+	});
+	const rows = res.data.values ?? [];
+	const rowIndex = rows.findIndex((r, i) => i > 0 && r[0] === appId);
+	if (rowIndex === -1) return false;
+
+	await sheets.spreadsheets.batchUpdate({
+		spreadsheetId: sheetId,
+		requestBody: {
+			requests: [
+				{
+					deleteDimension: {
+						range: {
+							sheetId: gid,
+							dimension: 'ROWS',
+							startIndex: rowIndex,
+							endIndex: rowIndex + 1
+						}
+					}
+				}
+			]
+		}
+	});
+	return true;
+}
+
 export async function addAppSpend(
 	auth: OAuth2Client,
 	rootFolderId: string,
