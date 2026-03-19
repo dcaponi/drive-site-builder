@@ -1,6 +1,6 @@
 import type { OAuth2Client } from 'google-auth-library';
 import { getDrive, getDocs } from './google.js';
-import type { AppConfig, AssetInfo } from '../types.js';
+import type { AppConfig, AssetInfo, ScriptFile } from '../types.js';
 import { getConfigSheet, updateAppInConfig, addAppToConfig } from './sheets.js';
 import { v4 as uuidv4 } from 'uuid';
 import { env } from '$env/dynamic/private';
@@ -421,6 +421,42 @@ export async function listFolderAssets(
 		name: f.name!,
 		mimeType: f.mimeType!
 	}));
+}
+
+// ─── List and read custom .js script files in an app folder ───────────────────
+
+export async function listFolderScripts(
+	auth: OAuth2Client,
+	folderId: string
+): Promise<ScriptFile[]> {
+	const drive = getDrive(auth);
+	// Match plain-text files whose name ends in .js
+	const res = await drive.files.list({
+		q: `'${folderId}' in parents and mimeType = 'text/plain' and trashed = false`,
+		fields: 'files(id,name)',
+		orderBy: 'name',
+		...DRIVE_PARAMS
+	});
+
+	const jsFiles = (res.data.files ?? []).filter((f) => f.name?.endsWith('.js'));
+	if (!jsFiles.length) return [];
+
+	// Read each file's content in parallel
+	const scripts = await Promise.all(
+		jsFiles.map(async (f) => {
+			const content = await drive.files.get(
+				{ fileId: f.id!, alt: 'media', ...DRIVE_PARAMS },
+				{ responseType: 'text' }
+			);
+			return {
+				id: f.id!,
+				name: f.name!,
+				content: ((content.data as string) ?? '').trim()
+			};
+		})
+	);
+
+	return scripts.filter((s) => s.content.length > 0);
 }
 
 // ─── Download a file's binary content from Drive ──────────────────────────────

@@ -48,6 +48,12 @@ export interface AssetInfo {
 	mimeType: string;
 }
 
+export interface ScriptFile {
+	id: string;
+	name: string;
+	content: string;
+}
+
 export interface BuildResult {
 	success: boolean;
 	code?: string;

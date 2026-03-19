@@ -14,14 +14,16 @@ import {
 	readGeneratedCode,
 	writeGeneratedCode,
 	appendToRequirementsDoc,
-	listFolderAssets
+	listFolderAssets,
+	listFolderScripts
 } from '$lib/server/drive.js';
 import {
 	generateEditDiff,
 	editApp,
 	summariseRequest,
 	classifyIntent,
-	chatWithTools
+	chatWithTools,
+	injectScripts
 } from '$lib/server/anthropic.js';
 import { parseEditBlocks, applyEditBlocks, isFullHtml, stripDiffMarkers, stripCodeFences } from '$lib/server/editDiff.js';
 import { verifyUserToken, userCookieName } from '$lib/server/userAuth.js';
@@ -158,12 +160,13 @@ export const POST: RequestHandler = async ({ params, request, locals, url, cooki
 		try {
 			updateJob(jobId, { status: 'running', progress: 'Loading app…' });
 
-			const [requirements, schema, currentCode, uxSummaries, assets] = await Promise.all([
+			const [requirements, schema, currentCode, uxSummaries, assets, scripts] = await Promise.all([
 				readRequirementsDoc(auth, app.requirements_doc_id),
 				getAppSchema(auth, app.database_sheet_id),
 				readGeneratedCode(auth, app.generated_code_doc_id).catch(() => ''),
 				getConversationSummaries(auth, rootFolderId, appId).catch(() => [] as string[]),
-				listFolderAssets(auth, app.folder_id)
+				listFolderAssets(auth, app.folder_id),
+				listFolderScripts(auth, app.folder_id)
 			]);
 
 			const now = new Date().toISOString();
@@ -181,7 +184,7 @@ export const POST: RequestHandler = async ({ params, request, locals, url, cooki
 			updateJob(jobId, { progress: 'Generating diff…' });
 			let diffOutput = '';
 			for await (const chunk of generateEditDiff(
-				currentCode, editRequest, requirements, schema, url.origin, appId, uxSummaries, trackCost, assets
+				currentCode, editRequest, requirements, schema, url.origin, appId, uxSummaries, trackCost, assets, scripts
 			)) {
 				diffOutput += chunk;
 			}
@@ -206,7 +209,7 @@ export const POST: RequestHandler = async ({ params, request, locals, url, cooki
 					finalCode = stripDiffMarkers(diffOutput);
 				} else {
 					for await (const chunk of editApp(
-						currentCode, editRequest, requirements, schema, url.origin, appId, uxSummaries, trackCost, assets
+						currentCode, editRequest, requirements, schema, url.origin, appId, uxSummaries, trackCost, assets, scripts
 					)) {
 						finalCode += chunk;
 					}
@@ -216,6 +219,7 @@ export const POST: RequestHandler = async ({ params, request, locals, url, cooki
 
 			// Safety: strip any stray diff markers before saving
 			finalCode = stripDiffMarkers(finalCode);
+			finalCode = injectScripts(finalCode, scripts);
 
 			updateJob(jobId, { progress: 'Saving changes…' });
 

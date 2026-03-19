@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { env } from '$env/dynamic/private';
-import type { TableSchema, AssetInfo } from '../types.js';
+import type { TableSchema, AssetInfo, ScriptFile } from '../types.js';
 
 let _client: Anthropic | null = null;
 
@@ -64,13 +64,33 @@ Rules for assets:
 - Assets are served with proper caching headers, so no need to worry about performance.\n`;
 }
 
+function scriptsBlock(scripts: ScriptFile[]): string {
+	if (!scripts.length) return '';
+	const entries = scripts.map(
+		(s) => `── ${s.name} ──\n${s.content}`
+	);
+	return `\nCUSTOM SCRIPTS:
+The app owner has added custom JavaScript files to the project folder. These scripts will be
+automatically injected into the app as <script> tags — you do NOT need to include their source
+code in your output. However, the functions and variables they define are available for you to
+call from your generated code. Here are the scripts and their contents so you know what's available:
+
+${entries.join('\n\n')}
+
+Rules for custom scripts:
+- Do NOT reproduce the custom script code in your output — it is injected automatically.
+- You MAY call any functions or reference any variables defined in these scripts from your own <script> code.
+- The custom scripts are loaded before your <script type="module"> block, so their globals are available.\n`;
+}
+
 function buildSystemPrompt(
 	requirements: string,
 	tables: TableSchema[],
 	apiBase: string,
 	appId: string,
 	uxSummaries: string[],
-	assets: AssetInfo[] = []
+	assets: AssetInfo[] = [],
+	scripts: ScriptFile[] = []
 ): string {
 	return `You are an expert full-stack web developer. Your job is to generate a complete, single-file HTML web application.
 
@@ -89,7 +109,7 @@ Available endpoints for each table:
   GET    /api/crud/${appId}/{table}/{id}  → { data: record }
   PUT    /api/crud/${appId}/{table}/{id}  → { data: record }   body: JSON object (partial)
   DELETE /api/crud/${appId}/{table}/{id}  → { success: true }
-${uxLessonsBlock(uxSummaries)}${assetsBlock(assets, apiBase, appId)}
+${uxLessonsBlock(uxSummaries)}${assetsBlock(assets, apiBase, appId)}${scriptsBlock(scripts)}
 USER AUTH API (if app has user system):
   POST   /api/apps/${appId}/users  (action: signup)  body: { email, password }  → 200 { userId, email } or 401
   POST   /api/apps/${appId}/users  (action: login)   body: { email, password }  → 200 { userId, email } or 401
@@ -130,10 +150,11 @@ export async function* generateApp(
 	appId: string,
 	uxSummaries: string[],
 	onCost?: (cost: number) => void,
-	assets: AssetInfo[] = []
+	assets: AssetInfo[] = [],
+	scripts: ScriptFile[] = []
 ): AsyncGenerator<string> {
 	const client = getClient();
-	const system = buildSystemPrompt(requirements, tables, apiBase, appId, uxSummaries, assets);
+	const system = buildSystemPrompt(requirements, tables, apiBase, appId, uxSummaries, assets, scripts);
 
 	const stream = client.messages.stream({
 		model: INITIAL_MODEL,
@@ -186,10 +207,11 @@ export async function* continueApp(
 	appId: string,
 	uxSummaries: string[],
 	onCost?: (cost: number) => void,
-	assets: AssetInfo[] = []
+	assets: AssetInfo[] = [],
+	scripts: ScriptFile[] = []
 ): AsyncGenerator<string> {
 	const client = getClient();
-	const system = buildSystemPrompt(requirements, tables, apiBase, appId, uxSummaries, assets);
+	const system = buildSystemPrompt(requirements, tables, apiBase, appId, uxSummaries, assets, scripts);
 	const clean = stripTruncationMarker(partialCode);
 
 	const stream = client.messages.stream({
@@ -253,10 +275,11 @@ export async function* generateEditDiff(
 	appId: string,
 	uxSummaries: string[],
 	onCost?: (cost: number) => void,
-	assets: AssetInfo[] = []
+	assets: AssetInfo[] = [],
+	scripts: ScriptFile[] = []
 ): AsyncGenerator<string> {
 	const client = getClient();
-	const system = buildSystemPrompt(requirements, tables, apiBase, appId, uxSummaries, assets) + DIFF_SYSTEM_SUFFIX;
+	const system = buildSystemPrompt(requirements, tables, apiBase, appId, uxSummaries, assets, scripts) + DIFF_SYSTEM_SUFFIX;
 
 	const stream = client.messages.stream({
 		model: EDIT_MODEL,
@@ -294,10 +317,11 @@ export async function* editApp(
 	appId: string,
 	uxSummaries: string[],
 	onCost?: (cost: number) => void,
-	assets: AssetInfo[] = []
+	assets: AssetInfo[] = [],
+	scripts: ScriptFile[] = []
 ): AsyncGenerator<string> {
 	const client = getClient();
-	const system = buildSystemPrompt(requirements, tables, apiBase, appId, uxSummaries, assets);
+	const system = buildSystemPrompt(requirements, tables, apiBase, appId, uxSummaries, assets, scripts);
 
 	const stream = client.messages.stream({
 		model: EDIT_MODEL,
@@ -493,4 +517,29 @@ export async function summariseRequest(
 	if (onCost) onCost(calcCost(model, response.usage.input_tokens, response.usage.output_tokens));
 	const block = response.content.find((b) => b.type === 'text');
 	return block?.type === 'text' ? block.text.trim() : editRequest.slice(0, 100);
+}
+
+// ─── Inject custom scripts into generated HTML ────────────────────────────────
+
+export function injectScripts(html: string, scripts: ScriptFile[]): string {
+	if (!scripts.length) return html;
+
+	const tags = scripts
+		.map((s) => `<script>/* ${s.name} */\n${s.content}\n</script>`)
+		.join('\n');
+
+	// Insert before the first <script type="module"> so custom globals are available
+	const moduleIdx = html.indexOf('<script type="module">');
+	if (moduleIdx !== -1) {
+		return html.slice(0, moduleIdx) + tags + '\n' + html.slice(moduleIdx);
+	}
+
+	// Fallback: insert before </body> or </html>
+	const bodyClose = html.lastIndexOf('</body>');
+	if (bodyClose !== -1) {
+		return html.slice(0, bodyClose) + tags + '\n' + html.slice(bodyClose);
+	}
+
+	// Last resort: append
+	return html + '\n' + tags;
 }
