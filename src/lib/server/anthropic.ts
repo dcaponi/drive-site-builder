@@ -9,6 +9,55 @@ function getClient() {
 	return _client;
 }
 
+// Detect rate-limit errors from Anthropic SDK
+function isRateLimitError(err: unknown): boolean {
+	if (err instanceof Anthropic.RateLimitError) return true;
+	if (err instanceof Anthropic.APIError && err.status === 429) return true;
+	return false;
+}
+
+// Extract wait time from error headers or use exponential backoff
+function getRetryWaitMs(err: unknown, attempt: number): number {
+	if (err instanceof Anthropic.APIError) {
+		const retryAfter = err.headers?.['retry-after'];
+		if (retryAfter) return Math.min(parseFloat(retryAfter) * 1000, 60_000);
+	}
+	return Math.min(1000 * 2 ** attempt, 30_000);
+}
+
+// Retry helper for rate-limited API calls (429).
+async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
+	for (let attempt = 0; ; attempt++) {
+		try {
+			return await fn();
+		} catch (err: unknown) {
+			if (!isRateLimitError(err) || attempt >= maxRetries) throw err;
+			await new Promise((r) => setTimeout(r, getRetryWaitMs(err, attempt)));
+		}
+	}
+}
+
+// Streaming retry — wraps a stream-creating function with rate-limit retry.
+// The stream's `response` promise resolves once the HTTP response arrives,
+// surfacing any 429 before we start iterating events.
+type MessageStream = ReturnType<InstanceType<typeof Anthropic>['messages']['stream']>;
+
+async function withStreamRetry(
+	fn: () => MessageStream,
+	maxRetries = 3
+): Promise<MessageStream> {
+	for (let attempt = 0; ; attempt++) {
+		try {
+			const stream = fn();
+			await stream.response;
+			return stream;
+		} catch (err: unknown) {
+			if (!isRateLimitError(err) || attempt >= maxRetries) throw err;
+			await new Promise((r) => setTimeout(r, getRetryWaitMs(err, attempt)));
+		}
+	}
+}
+
 const INITIAL_MODEL = 'claude-opus-4-6';
 const EDIT_MODEL = 'claude-sonnet-4-6';
 
@@ -156,7 +205,7 @@ export async function* generateApp(
 	const client = getClient();
 	const system = buildSystemPrompt(requirements, tables, apiBase, appId, uxSummaries, assets, scripts);
 
-	const stream = client.messages.stream({
+	const stream = await withStreamRetry(() => client.messages.stream({
 		model: INITIAL_MODEL,
 		max_tokens: 64000,
 		// @ts-expect-error - thinking is valid for Opus 4.6
@@ -168,7 +217,7 @@ export async function* generateApp(
 				content: 'Generate the complete HTML application now. Output only the HTML.'
 			}
 		]
-	});
+	}));
 
 	for await (const event of stream) {
 		if (
@@ -214,7 +263,7 @@ export async function* continueApp(
 	const system = buildSystemPrompt(requirements, tables, apiBase, appId, uxSummaries, assets, scripts);
 	const clean = stripTruncationMarker(partialCode);
 
-	const stream = client.messages.stream({
+	const stream = await withStreamRetry(() => client.messages.stream({
 		model: INITIAL_MODEL,
 		max_tokens: 64000,
 		// @ts-expect-error - thinking is valid for Opus 4.6
@@ -226,7 +275,7 @@ export async function* continueApp(
 				content: `You previously started generating an HTML application but were cut off by the token limit. Here is the partial HTML output so far:\n\n${clean}\n\nContinue generating from exactly where you left off. Output ONLY the continuation — do not repeat anything already written. Output only valid HTML.`
 			}
 		]
-	});
+	}));
 
 	for await (const event of stream) {
 		if (
@@ -281,7 +330,7 @@ export async function* generateEditDiff(
 	const client = getClient();
 	const system = buildSystemPrompt(requirements, tables, apiBase, appId, uxSummaries, assets, scripts) + DIFF_SYSTEM_SUFFIX;
 
-	const stream = client.messages.stream({
+	const stream = await withStreamRetry(() => client.messages.stream({
 		model: EDIT_MODEL,
 		max_tokens: 32000,
 		system,
@@ -291,7 +340,7 @@ export async function* generateEditDiff(
 				content: `Here is the current generated application:\n\n${currentCode}\n\nEdit request: ${editRequest}\n\nOutput only SEARCH/REPLACE diff blocks (or the full HTML if the change is large).`
 			}
 		]
-	});
+	}));
 
 	for await (const event of stream) {
 		if (
@@ -323,7 +372,7 @@ export async function* editApp(
 	const client = getClient();
 	const system = buildSystemPrompt(requirements, tables, apiBase, appId, uxSummaries, assets, scripts);
 
-	const stream = client.messages.stream({
+	const stream = await withStreamRetry(() => client.messages.stream({
 		model: EDIT_MODEL,
 		max_tokens: 64000,
 		system,
@@ -333,7 +382,7 @@ export async function* editApp(
 				content: `Here is the current generated application:\n\n${currentCode}\n\nEdit request: ${editRequest}\n\nOutput the complete updated HTML file. Output only the HTML, no explanation.`
 			}
 		]
-	});
+	}));
 
 	for await (const event of stream) {
 		if (
@@ -360,7 +409,7 @@ export async function classifyIntent(
 ): Promise<'update' | 'chat'> {
 	const client = getClient();
 	const model = 'claude-haiku-4-5-20251001';
-	const response = await client.messages.create({
+	const response = await withRetry(() => client.messages.create({
 		model,
 		max_tokens: 10,
 		messages: [
@@ -369,7 +418,7 @@ export async function classifyIntent(
 				content: `Classify this message as either "update" (a request to change/add/remove code or features in the app) or "chat" (a question, comment, or conversational message that does not require changing the app). Reply with exactly one word: update or chat.\n\nMessage: "${message}"`
 			}
 		]
-	});
+	}));
 	if (onCost) onCost(calcCost(model, response.usage.input_tokens, response.usage.output_tokens));
 	const text = response.content.find((b) => b.type === 'text');
 	const word = text?.type === 'text' ? text.text.trim().toLowerCase() : 'update';
@@ -386,7 +435,7 @@ export async function* chatConversation(
 ): AsyncGenerator<string> {
 	const client = getClient();
 
-	const stream = client.messages.stream({
+	const stream = await withStreamRetry(() => client.messages.stream({
 		model: EDIT_MODEL,
 		max_tokens: 1024,
 		system: `You are a helpful assistant for the "${appName}" web application. You help users understand what the app does and answer questions about it. Here are the app's requirements:\n\n${requirements}\n\nBe concise and friendly. Do not output code unless specifically asked.`,
@@ -396,7 +445,7 @@ export async function* chatConversation(
 				content: message
 			}
 		]
-	});
+	}));
 
 	for await (const event of stream) {
 		if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
@@ -445,13 +494,13 @@ export async function chatWithTools(
 	let messages: Anthropic.MessageParam[] = [{ role: 'user', content: message }];
 
 	for (let round = 0; round < 4; round++) {
-		const response = await client.messages.create({
+		const response = await withRetry(() => client.messages.create({
 			model: EDIT_MODEL,
 			max_tokens: 1024,
 			system: systemPrompt,
 			tools: CREDENTIAL_TOOLS,
 			messages
-		});
+		}));
 
 		if (onCost) onCost(calcCost(EDIT_MODEL, response.usage.input_tokens, response.usage.output_tokens));
 
@@ -504,7 +553,7 @@ export async function summariseRequest(
 ): Promise<string> {
 	const client = getClient();
 	const model = 'claude-haiku-4-5-20251001';
-	const response = await client.messages.create({
+	const response = await withRetry(() => client.messages.create({
 		model,
 		max_tokens: 100,
 		messages: [
@@ -513,7 +562,7 @@ export async function summariseRequest(
 				content: `Summarise this app edit request in one short sentence (max 15 words), focusing on the UX/UI change requested:\n\n"${editRequest}"`
 			}
 		]
-	});
+	}));
 	if (onCost) onCost(calcCost(model, response.usage.input_tokens, response.usage.output_tokens));
 	const block = response.content.find((b) => b.type === 'text');
 	return block?.type === 'text' ? block.text.trim() : editRequest.slice(0, 100);
