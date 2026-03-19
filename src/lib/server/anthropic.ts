@@ -25,14 +25,18 @@ function getRetryWaitMs(err: unknown, attempt: number): number {
 	return Math.min(1000 * 2 ** attempt, 30_000);
 }
 
+export type ProgressCallback = (message: string) => void;
+
 // Retry helper for rate-limited API calls (429).
-async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
+async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3, onProgress?: ProgressCallback): Promise<T> {
 	for (let attempt = 0; ; attempt++) {
 		try {
 			return await fn();
 		} catch (err: unknown) {
 			if (!isRateLimitError(err) || attempt >= maxRetries) throw err;
-			await new Promise((r) => setTimeout(r, getRetryWaitMs(err, attempt)));
+			const waitMs = getRetryWaitMs(err, attempt);
+			if (onProgress) onProgress(`Rate limited — retrying in ${Math.ceil(waitMs / 1000)}s (attempt ${attempt + 1}/${maxRetries})…`);
+			await new Promise((r) => setTimeout(r, waitMs));
 		}
 	}
 }
@@ -44,7 +48,8 @@ type MessageStream = ReturnType<InstanceType<typeof Anthropic>['messages']['stre
 
 async function withStreamRetry(
 	fn: () => MessageStream,
-	maxRetries = 3
+	maxRetries = 3,
+	onProgress?: ProgressCallback
 ): Promise<MessageStream> {
 	for (let attempt = 0; ; attempt++) {
 		try {
@@ -53,7 +58,9 @@ async function withStreamRetry(
 			return stream;
 		} catch (err: unknown) {
 			if (!isRateLimitError(err) || attempt >= maxRetries) throw err;
-			await new Promise((r) => setTimeout(r, getRetryWaitMs(err, attempt)));
+			const waitMs = getRetryWaitMs(err, attempt);
+			if (onProgress) onProgress(`Rate limited — retrying in ${Math.ceil(waitMs / 1000)}s (attempt ${attempt + 1}/${maxRetries})…`);
+			await new Promise((r) => setTimeout(r, waitMs));
 		}
 	}
 }
@@ -200,11 +207,13 @@ export async function* generateApp(
 	uxSummaries: string[],
 	onCost?: (cost: number) => void,
 	assets: AssetInfo[] = [],
-	scripts: ScriptFile[] = []
+	scripts: ScriptFile[] = [],
+	onProgress?: ProgressCallback
 ): AsyncGenerator<string> {
 	const client = getClient();
 	const system = buildSystemPrompt(requirements, tables, apiBase, appId, uxSummaries, assets, scripts);
 
+	if (onProgress) onProgress('Waiting for Claude…');
 	const stream = await withStreamRetry(() => client.messages.stream({
 		model: INITIAL_MODEL,
 		max_tokens: 64000,
@@ -217,7 +226,7 @@ export async function* generateApp(
 				content: 'Generate the complete HTML application now. Output only the HTML.'
 			}
 		]
-	}));
+	}), 3, onProgress);
 
 	for await (const event of stream) {
 		if (
@@ -257,12 +266,14 @@ export async function* continueApp(
 	uxSummaries: string[],
 	onCost?: (cost: number) => void,
 	assets: AssetInfo[] = [],
-	scripts: ScriptFile[] = []
+	scripts: ScriptFile[] = [],
+	onProgress?: ProgressCallback
 ): AsyncGenerator<string> {
 	const client = getClient();
 	const system = buildSystemPrompt(requirements, tables, apiBase, appId, uxSummaries, assets, scripts);
 	const clean = stripTruncationMarker(partialCode);
 
+	if (onProgress) onProgress('Waiting for Claude…');
 	const stream = await withStreamRetry(() => client.messages.stream({
 		model: INITIAL_MODEL,
 		max_tokens: 64000,
@@ -275,7 +286,7 @@ export async function* continueApp(
 				content: `You previously started generating an HTML application but were cut off by the token limit. Here is the partial HTML output so far:\n\n${clean}\n\nContinue generating from exactly where you left off. Output ONLY the continuation — do not repeat anything already written. Output only valid HTML.`
 			}
 		]
-	}));
+	}), 3, onProgress);
 
 	for await (const event of stream) {
 		if (
@@ -325,11 +336,13 @@ export async function* generateEditDiff(
 	uxSummaries: string[],
 	onCost?: (cost: number) => void,
 	assets: AssetInfo[] = [],
-	scripts: ScriptFile[] = []
+	scripts: ScriptFile[] = [],
+	onProgress?: ProgressCallback
 ): AsyncGenerator<string> {
 	const client = getClient();
 	const system = buildSystemPrompt(requirements, tables, apiBase, appId, uxSummaries, assets, scripts) + DIFF_SYSTEM_SUFFIX;
 
+	if (onProgress) onProgress('Waiting for Claude…');
 	const stream = await withStreamRetry(() => client.messages.stream({
 		model: EDIT_MODEL,
 		max_tokens: 32000,
@@ -340,7 +353,7 @@ export async function* generateEditDiff(
 				content: `Here is the current generated application:\n\n${currentCode}\n\nEdit request: ${editRequest}\n\nOutput only SEARCH/REPLACE diff blocks (or the full HTML if the change is large).`
 			}
 		]
-	}));
+	}), 3, onProgress);
 
 	for await (const event of stream) {
 		if (
@@ -367,11 +380,13 @@ export async function* editApp(
 	uxSummaries: string[],
 	onCost?: (cost: number) => void,
 	assets: AssetInfo[] = [],
-	scripts: ScriptFile[] = []
+	scripts: ScriptFile[] = [],
+	onProgress?: ProgressCallback
 ): AsyncGenerator<string> {
 	const client = getClient();
 	const system = buildSystemPrompt(requirements, tables, apiBase, appId, uxSummaries, assets, scripts);
 
+	if (onProgress) onProgress('Waiting for Claude…');
 	const stream = await withStreamRetry(() => client.messages.stream({
 		model: EDIT_MODEL,
 		max_tokens: 64000,
@@ -382,7 +397,7 @@ export async function* editApp(
 				content: `Here is the current generated application:\n\n${currentCode}\n\nEdit request: ${editRequest}\n\nOutput the complete updated HTML file. Output only the HTML, no explanation.`
 			}
 		]
-	}));
+	}), 3, onProgress);
 
 	for await (const event of stream) {
 		if (

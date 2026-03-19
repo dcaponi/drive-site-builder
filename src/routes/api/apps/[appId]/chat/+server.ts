@@ -157,6 +157,9 @@ export const POST: RequestHandler = async ({ params, request, locals, url, cooki
 	const jobId = createJob();
 
 	(async () => {
+		const onProgress = (msg: string) => updateJob(jobId, { progress: msg });
+		const countLines = (s: string) => s.split('\n').length;
+
 		try {
 			updateJob(jobId, { status: 'running', progress: 'Loading app…' });
 
@@ -183,10 +186,16 @@ export const POST: RequestHandler = async ({ params, request, locals, url, cooki
 			// ── Phase 1: diff ─────────────────────────────────────────────────
 			updateJob(jobId, { progress: 'Generating diff…' });
 			let diffOutput = '';
+			let diffLines = 0;
 			for await (const chunk of generateEditDiff(
-				currentCode, editRequest, requirements, schema, url.origin, appId, uxSummaries, trackCost, assets, scripts
+				currentCode, editRequest, requirements, schema, url.origin, appId, uxSummaries, trackCost, assets, scripts, onProgress
 			)) {
 				diffOutput += chunk;
+				const newLines = countLines(diffOutput);
+				if (newLines > diffLines) {
+					diffLines = newLines;
+					updateJob(jobId, { progress: `Generating diff — ${diffLines} lines…` });
+				}
 			}
 			diffOutput = stripCodeFences(diffOutput);
 
@@ -202,16 +211,22 @@ export const POST: RequestHandler = async ({ params, request, locals, url, cooki
 
 			if (finalCode === null) {
 				// ── Phase 2: full regen ───────────────────────────────────────
-				updateJob(jobId, { progress: 'Regenerating app…' });
+				updateJob(jobId, { progress: 'Diff failed, regenerating full app…' });
 				finalCode = '';
 
 				if (isFullHtml(diffOutput)) {
 					finalCode = stripDiffMarkers(diffOutput);
 				} else {
+					let regenLines = 0;
 					for await (const chunk of editApp(
-						currentCode, editRequest, requirements, schema, url.origin, appId, uxSummaries, trackCost, assets, scripts
+						currentCode, editRequest, requirements, schema, url.origin, appId, uxSummaries, trackCost, assets, scripts, onProgress
 					)) {
 						finalCode += chunk;
+						const newLines = countLines(finalCode);
+						if (newLines > regenLines) {
+							regenLines = newLines;
+							updateJob(jobId, { progress: `Regenerating — ${regenLines} lines written…` });
+						}
 					}
 					finalCode = stripCodeFences(finalCode);
 				}
@@ -221,7 +236,7 @@ export const POST: RequestHandler = async ({ params, request, locals, url, cooki
 			finalCode = stripDiffMarkers(finalCode);
 			finalCode = injectScripts(finalCode, scripts);
 
-			updateJob(jobId, { progress: 'Saving changes…' });
+			updateJob(jobId, { progress: `Saving changes (${countLines(finalCode)} lines)…` });
 
 			const [summary] = await Promise.all([
 				summaryPromise,

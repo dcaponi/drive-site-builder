@@ -8,6 +8,10 @@ import { error, json } from '@sveltejs/kit';
 import { createJob, updateJob } from '$lib/server/jobQueue.js';
 import { stripCodeFences } from '$lib/server/editDiff.js';
 
+function countLines(code: string): number {
+	return code.split('\n').length;
+}
+
 export const POST: RequestHandler = async ({ params, locals, url }) => {
 	const user = locals.user as SessionUser;
 	const appId = params.appId!;
@@ -33,20 +37,27 @@ export const POST: RequestHandler = async ({ params, locals, url }) => {
 	(async () => {
 		let totalCost = 0;
 		const trackCost = (c: number) => { totalCost += c; };
+		const onProgress = (msg: string) => updateJob(jobId, { progress: msg });
 
 		try {
 			if (shouldContinue) {
 				const partialCode = stripTruncationMarker(existingCode);
 				let continuation = '';
+				let lines = countLines(partialCode);
 
-				updateJob(jobId, { status: 'running', progress: 'Continuing previous build…' });
+				updateJob(jobId, { status: 'running', progress: `Continuing previous build (${lines} lines so far)…` });
 
-				for await (const chunk of continueApp(partialCode, requirements, schema, url.origin, appId, uxSummaries, trackCost, assets, scripts)) {
+				for await (const chunk of continueApp(partialCode, requirements, schema, url.origin, appId, uxSummaries, trackCost, assets, scripts, onProgress)) {
 					continuation += chunk;
+					const newLines = countLines(partialCode + continuation);
+					if (newLines > lines) {
+						lines = newLines;
+						updateJob(jobId, { progress: `Generating code — ${lines} lines written…` });
+					}
 				}
 				continuation = stripCodeFences(continuation);
 
-				updateJob(jobId, { status: 'running', progress: 'Saving to Drive…' });
+				updateJob(jobId, { progress: `Saving to Drive (${countLines(partialCode + continuation)} lines)…` });
 
 				const continuedCode = injectScripts(partialCode + '\n' + continuation, scripts);
 				await writeGeneratedCode(
@@ -56,15 +67,21 @@ export const POST: RequestHandler = async ({ params, locals, url }) => {
 				);
 			} else {
 				let fullCode = '';
+				let lines = 0;
 
 				updateJob(jobId, { status: 'running', progress: 'Generating code…' });
 
-				for await (const chunk of generateApp(requirements, schema, url.origin, appId, uxSummaries, trackCost, assets, scripts)) {
+				for await (const chunk of generateApp(requirements, schema, url.origin, appId, uxSummaries, trackCost, assets, scripts, onProgress)) {
 					fullCode += chunk;
+					const newLines = countLines(fullCode);
+					if (newLines > lines) {
+						lines = newLines;
+						updateJob(jobId, { progress: `Generating code — ${lines} lines written…` });
+					}
 				}
 				fullCode = stripCodeFences(fullCode);
 
-				updateJob(jobId, { status: 'running', progress: 'Saving to Drive…' });
+				updateJob(jobId, { progress: `Saving to Drive (${countLines(fullCode)} lines)…` });
 
 				fullCode = injectScripts(fullCode, scripts);
 				await writeGeneratedCode(
