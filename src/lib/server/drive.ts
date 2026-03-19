@@ -425,15 +425,23 @@ export async function listFolderAssets(
 
 // ─── List and read custom .js script files in an app folder ───────────────────
 
+const JS_MIME_TYPES = [
+	'text/plain',
+	'application/x-javascript',
+	'application/javascript',
+	'text/javascript'
+];
+
 export async function listFolderScripts(
 	auth: OAuth2Client,
 	folderId: string
 ): Promise<ScriptFile[]> {
 	const drive = getDrive(auth);
-	// Match plain-text files whose name ends in .js
+	// Match text or JavaScript files whose name ends in .js
+	const mimeFilter = JS_MIME_TYPES.map((m) => `mimeType = '${m}'`).join(' or ');
 	const res = await drive.files.list({
-		q: `'${folderId}' in parents and mimeType = 'text/plain' and trashed = false`,
-		fields: 'files(id,name)',
+		q: `'${folderId}' in parents and (${mimeFilter}) and trashed = false`,
+		fields: 'files(id,name,mimeType)',
 		orderBy: 'name',
 		...DRIVE_PARAMS
 	});
