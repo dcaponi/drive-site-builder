@@ -4,13 +4,23 @@ import { getAuthedClient } from '$lib/server/auth.js';
 import { getFirstUserEmail, getUserClient, getUserSession } from '$lib/server/rootAuth.js';
 import { getHomeApp, findAppUser } from '$lib/server/sheets.js';
 import { verifyUserToken, userCookieName } from '$lib/server/userAuth.js';
+import { getCachedHomeApp } from '$lib/server/siteCache.js';
+
+function serveCachedHome() {
+	const homeApp = getCachedHomeApp();
+	if (!homeApp) return { homeApp: null, unavailable: true };
+	if (homeApp.members_only) {
+		return { homeApp, authed: false, role: 'public' as const, can_chat: false, members_only: true };
+	}
+	return { homeApp, authed: true, role: 'public' as const, can_chat: false };
+}
 
 export const load: PageServerLoad = async ({ locals, url, cookies }) => {
 	const user = locals.user as SessionUser | null;
 
 	const firstEmail = getFirstUserEmail();
 	if (!firstEmail) {
-		return { homeApp: null, unavailable: true };
+		return serveCachedHome();
 	}
 
 	let auth;
@@ -25,11 +35,11 @@ export const load: PageServerLoad = async ({ locals, url, cookies }) => {
 		try {
 			auth = getUserClient(firstEmail, url.origin);
 		} catch {
-			return { homeApp: null, unavailable: true };
+			return serveCachedHome();
 		}
 		const session = getUserSession(firstEmail);
 		if (!session?.root_folder_id) {
-			return { homeApp: null, unavailable: true };
+			return serveCachedHome();
 		}
 		rootFolderId = session.root_folder_id;
 	}
@@ -38,11 +48,11 @@ export const load: PageServerLoad = async ({ locals, url, cookies }) => {
 	try {
 		homeApp = await getHomeApp(auth, rootFolderId!);
 	} catch {
-		return { homeApp: null, unavailable: true };
+		return serveCachedHome();
 	}
 
 	if (!homeApp) {
-		return { homeApp: null, unavailable: true };
+		return serveCachedHome();
 	}
 
 	// ── Serve the home app with auth logic ──

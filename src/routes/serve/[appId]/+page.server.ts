@@ -4,6 +4,7 @@ import { getAuthedClient } from '$lib/server/auth.js';
 import { lookupApp, getUserClient } from '$lib/server/rootAuth.js';
 import { getAppById, findAppUser } from '$lib/server/sheets.js';
 import { verifyUserToken, userCookieName } from '$lib/server/userAuth.js';
+import { getCachedApp } from '$lib/server/siteCache.js';
 import { error } from '@sveltejs/kit';
 
 function resolveAppAuth(user: SessionUser | null, reg: { ownerEmail: string; rootFolderId: string }, origin: string) {
@@ -14,25 +15,35 @@ function resolveAppAuth(user: SessionUser | null, reg: { ownerEmail: string; roo
 	return { auth, isOwner, rootFolderId: reg.rootFolderId };
 }
 
+function serveCached(appId: string) {
+	const app = getCachedApp(appId);
+	if (!app) throw error(503, 'Site temporarily unavailable — please try again later.');
+	if (app.members_only) {
+		return { app, authed: false, role: 'public' as const, can_chat: false, members_only: true };
+	}
+	return { app, authed: true, role: 'public' as const, can_chat: false };
+}
+
 export const load: PageServerLoad = async ({ params, locals, url, cookies }) => {
 	const user = locals.user as SessionUser | null;
+	const appId = params.appId!;
 
 	// Resolve via registry — never trust visiting user's rootFolderId
-	const reg = lookupApp(params.appId!);
-	if (!reg) throw error(503, 'Site temporarily unavailable — please try again later.');
+	const reg = lookupApp(appId);
+	if (!reg) return serveCached(appId);
 
 	let auth, isOwner, rootFolderId;
 	try {
 		({ auth, isOwner, rootFolderId } = resolveAppAuth(user, reg, url.origin));
 	} catch {
-		throw error(503, 'Site temporarily unavailable — please try again later.');
+		return serveCached(appId);
 	}
 
 	let app;
 	try {
-		app = await getAppById(auth, rootFolderId, params.appId!);
+		app = await getAppById(auth, rootFolderId, appId);
 	} catch {
-		throw error(503, 'Site temporarily unavailable — please try again later.');
+		return serveCached(appId);
 	}
 	if (!app) throw error(404, 'App not found');
 

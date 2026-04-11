@@ -12,5 +12,6 @@ vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .user-credentials.json
 .app-registry.json
+.site-cache/
 test-results/
 playwright-report/

@@ -2,6 +2,7 @@ import type { OAuth2Client } from 'google-auth-library';
 import { getDrive, getDocs } from './google.js';
 import type { AppConfig, AssetInfo, ScriptFile } from '../types.js';
 import { getConfigSheet, updateAppInConfig, addAppToConfig } from './sheets.js';
+import { cacheHtml } from './siteCache.js';
 import { v4 as uuidv4 } from 'uuid';
 import { env } from '$env/dynamic/private';
 
@@ -259,6 +260,7 @@ export async function writeGeneratedCode(
 					last_built_at: new Date().toISOString(),
 					updated_at: new Date().toISOString()
 				});
+				cacheHtml(appId, code);
 				return existingDocId;
 			} catch {
 				// File missing or inaccessible — delete orphan before creating new
@@ -285,6 +287,7 @@ export async function writeGeneratedCode(
 		updated_at: new Date().toISOString()
 	});
 
+	cacheHtml(appId, code);
 	return docId;
 }
 

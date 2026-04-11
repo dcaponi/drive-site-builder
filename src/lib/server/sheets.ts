@@ -1,6 +1,7 @@
 import type { OAuth2Client } from 'google-auth-library';
 import { getSheets, getDrive } from './google.js';
 import type { AppConfig, TableSchema, ColumnDef, CrudRecord, Conversation } from '../types.js';
+import { cacheAppConfigs } from './siteCache.js';
 import { v4 as uuidv4 } from 'uuid';
 
 const DRIVE_PARAMS = {
@@ -167,7 +168,7 @@ export async function getConfigSheet(auth: OAuth2Client, rootFolderId: string): 
 
 	if (rows.length === 0) return [];
 
-	return rows
+	const apps = rows
 		.slice(1)
 		.filter((r) => r[0])
 		.map((r) => ({
@@ -189,6 +190,9 @@ export async function getConfigSheet(auth: OAuth2Client, rootFolderId: string): 
 			app_slug: r[16] ?? '',
 			is_home: (r[17] ?? '') === 'true'
 		}));
+
+	cacheAppConfigs(apps);
+	return apps;
 }
 
 export async function getAppById(auth: OAuth2Client, rootFolderId: string, appId: string): Promise<AppConfig | null> {
