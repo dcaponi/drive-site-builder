@@ -5,15 +5,16 @@
 // registries to .app-registry.json so they survive server restarts.
 
 import { readFileSync, writeFileSync, existsSync } from 'fs';
-import { resolve } from 'path';
+import { join, resolve } from 'path';
 import type { SessionUser } from './auth.js';
 import { getAuthedClient } from './auth.js';
 import type { OAuth2Client } from 'google-auth-library';
+import { PERSIST_DIR } from './paths.js';
 
 // ─── File paths ──────────────────────────────────────────────────────────────
 
-const CRED_FILE = resolve('.user-credentials.json');
-const REGISTRY_FILE = resolve('.app-registry.json');
+const CRED_FILE = join(PERSIST_DIR, '.user-credentials.json');
+const REGISTRY_FILE = join(PERSIST_DIR, '.app-registry.json');
 const OLD_CRED_FILE = resolve('.root-credentials.json');
 
 // ─── In-memory stores ───────────────────────────────────────────────────────

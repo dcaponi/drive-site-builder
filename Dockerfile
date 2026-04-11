@@ -17,7 +17,10 @@ RUN npm ci --omit=dev
 
 COPY --from=builder /app/build ./build
 
+# Persistent data directory — mount a Railway volume here
+RUN mkdir -p /data
 ENV NODE_ENV=production
+ENV PERSIST_DIR=/data
 EXPOSE 3000
 
 CMD ["node", "build/index.js"]

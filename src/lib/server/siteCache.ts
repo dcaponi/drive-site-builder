@@ -3,10 +3,11 @@
 // can be served even when Google credentials are expired.
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
-import { resolve, join } from 'path';
+import { join } from 'path';
 import type { AppConfig } from '../types.js';
+import { PERSIST_DIR } from './paths.js';
 
-const CACHE_DIR = resolve('.site-cache');
+const CACHE_DIR = join(PERSIST_DIR, '.site-cache');
 const CONFIG_FILE = join(CACHE_DIR, 'apps.json');
 const HTML_DIR = join(CACHE_DIR, 'html');
 
