@@ -124,7 +124,30 @@ export function getUserClient(email: string, origin: string): OAuth2Client {
 			`Credentials not available for ${email} — that user must log in at least once first.`
 		);
 	}
-	return getAuthedClient(user, origin);
+	const client = getAuthedClient(user, origin);
+
+	// Persist refreshed tokens so the stored access_token stays fresh
+	client.on('tokens', (tokens) => {
+		let changed = false;
+		if (tokens.access_token) {
+			user.access_token = tokens.access_token;
+			changed = true;
+		}
+		if (tokens.expiry_date) {
+			user.expiry_date = tokens.expiry_date;
+			changed = true;
+		}
+		if (tokens.refresh_token) {
+			user.refresh_token = tokens.refresh_token;
+			changed = true;
+		}
+		if (changed) {
+			_credentials.set(email.toLowerCase(), user);
+			persistCredentials();
+		}
+	});
+
+	return client;
 }
 
 export function getUserSession(email: string): SessionUser | null {

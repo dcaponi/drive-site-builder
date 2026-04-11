@@ -47,14 +47,9 @@
 		</div>
 	{/if}
 {:else}
-	<!-- Fallback: shouldn't normally reach here since server redirects -->
-	<div class="login-wrapper">
-		<div class="login-box">
-			<div class="logo">&#128450;</div>
-			<h1>Drive Site Builder</h1>
-			<p class="tagline">Turn Google Drive folders into websites &mdash; powered by AI</p>
-			<a href="/login" class="login-btn">Sign in</a>
-		</div>
+	<div class="unavailable">
+		<h2>Site Temporarily Unavailable</h2>
+		<p>Please try again later.</p>
 	</div>
 {/if}
 
@@ -83,7 +78,7 @@
 		overflow: auto;
 	}
 
-	.login-card, .login-box {
+	.login-card {
 		background: #fff;
 		border: 1px solid #e5e7eb;
 		border-radius: 16px;
@@ -94,22 +89,11 @@
 		text-align: center;
 	}
 
-	.logo {
-		font-size: 3rem;
-		margin-bottom: 1rem;
-	}
-
 	h1 {
 		font-size: 1.5rem;
 		font-weight: 700;
 		margin-bottom: 0.35rem;
 		color: #111;
-	}
-
-	.tagline {
-		color: #6b7280;
-		margin-bottom: 2rem;
-		font-size: 0.95rem;
 	}
 
 	.login-subtitle {
@@ -153,5 +137,20 @@
 
 	.not-built a {
 		color: #4f46e5;
+	}
+
+	.unavailable {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		height: 100vh;
+		font-family: sans-serif;
+		color: #6b7280;
+	}
+
+	.unavailable h2 {
+		font-size: 1.5rem;
+		margin-bottom: 0.5rem;
 	}
 </style>

@@ -19,11 +19,21 @@ export const load: PageServerLoad = async ({ params, locals, url, cookies }) => 
 
 	// Resolve via registry — never trust visiting user's rootFolderId
 	const reg = lookupApp(params.appId!);
-	if (!reg) throw error(503, 'App owner must log in first');
+	if (!reg) throw error(503, 'Site temporarily unavailable — please try again later.');
 
-	const { auth, isOwner, rootFolderId } = resolveAppAuth(user, reg, url.origin);
+	let auth, isOwner, rootFolderId;
+	try {
+		({ auth, isOwner, rootFolderId } = resolveAppAuth(user, reg, url.origin));
+	} catch {
+		throw error(503, 'Site temporarily unavailable — please try again later.');
+	}
 
-	const app = await getAppById(auth, rootFolderId, params.appId!);
+	let app;
+	try {
+		app = await getAppById(auth, rootFolderId, params.appId!);
+	} catch {
+		throw error(503, 'Site temporarily unavailable — please try again later.');
+	}
 	if (!app) throw error(404, 'App not found');
 
 	// ISOLATION: Only grant 'root' role if visitor IS the app owner

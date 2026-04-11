@@ -19,15 +19,27 @@ export const load: PageServerLoad = async ({ params, locals, url, cookies }) => 
 	const user = locals.user as SessionUser | null;
 
 	const resolved = resolveReg(params.clientSlug, params.appSlug);
-	if (!resolved) throw error(503, 'App owner must log in first');
+	if (!resolved) throw error(503, 'Site temporarily unavailable — please try again later.');
 
-	const isOwner = user && user.email.toLowerCase() === resolved.ownerEmail.toLowerCase();
-	const auth = isOwner
-		? getAuthedClient(user, url.origin)
-		: getUserClient(resolved.ownerEmail, url.origin);
-	const rootFolderId = resolved.rootFolderId;
+	let isOwner: boolean;
+	let auth;
+	let rootFolderId: string;
+	try {
+		isOwner = !!(user && user.email.toLowerCase() === resolved.ownerEmail.toLowerCase());
+		auth = isOwner
+			? getAuthedClient(user!, url.origin)
+			: getUserClient(resolved.ownerEmail, url.origin);
+		rootFolderId = resolved.rootFolderId;
+	} catch {
+		throw error(503, 'Site temporarily unavailable — please try again later.');
+	}
 
-	const app = await getAppBySlug(auth, rootFolderId, params.clientSlug, params.appSlug);
+	let app;
+	try {
+		app = await getAppBySlug(auth, rootFolderId, params.clientSlug, params.appSlug);
+	} catch {
+		throw error(503, 'Site temporarily unavailable — please try again later.');
+	}
 	if (!app) throw error(404, 'App not found');
 
 	// ISOLATION: Only grant 'root' role if visitor IS the app owner

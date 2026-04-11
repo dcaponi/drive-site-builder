@@ -29,15 +29,27 @@ export const GET: RequestHandler = async ({ params, locals, url, cookies }) => {
 
 	// Resolve via registry
 	const reg = lookupApp(params.appId!);
-	if (!reg) throw error(503, 'App owner must log in first');
+	if (!reg) throw error(503, 'Site temporarily unavailable — please try again later.');
 
-	const isOwner = user && user.email.toLowerCase() === reg.ownerEmail.toLowerCase();
-	const auth = isOwner
-		? getAuthedClient(user, url.origin)
-		: getUserClient(reg.ownerEmail, url.origin);
-	const rootFolderId = reg.rootFolderId;
+	let isOwner: boolean;
+	let auth;
+	let rootFolderId: string;
+	try {
+		isOwner = !!(user && user.email.toLowerCase() === reg.ownerEmail.toLowerCase());
+		auth = isOwner
+			? getAuthedClient(user!, url.origin)
+			: getUserClient(reg.ownerEmail, url.origin);
+		rootFolderId = reg.rootFolderId;
+	} catch {
+		throw error(503, 'Site temporarily unavailable — please try again later.');
+	}
 
-	const app = await getAppById(auth, rootFolderId, params.appId!);
+	let app;
+	try {
+		app = await getAppById(auth, rootFolderId, params.appId!);
+	} catch {
+		throw error(503, 'Site temporarily unavailable — please try again later.');
+	}
 	if (!app) throw error(404, 'App not found');
 
 	// For non-owner visitors, verify they have a valid app token

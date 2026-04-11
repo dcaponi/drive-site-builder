@@ -4,14 +4,14 @@ import { getAuthedClient } from '$lib/server/auth.js';
 import { getFirstUserEmail, getUserClient, getUserSession } from '$lib/server/rootAuth.js';
 import { getHomeApp, findAppUser } from '$lib/server/sheets.js';
 import { verifyUserToken, userCookieName } from '$lib/server/userAuth.js';
-import { redirect } from '@sveltejs/kit';
 
 export const load: PageServerLoad = async ({ locals, url, cookies }) => {
 	const user = locals.user as SessionUser | null;
 
-	// Find the first available user's credentials for home app resolution
 	const firstEmail = getFirstUserEmail();
-	if (!firstEmail) throw redirect(302, '/login');
+	if (!firstEmail) {
+		return { homeApp: null, unavailable: true };
+	}
 
 	let auth;
 	let rootFolderId: string;
@@ -25,10 +25,12 @@ export const load: PageServerLoad = async ({ locals, url, cookies }) => {
 		try {
 			auth = getUserClient(firstEmail, url.origin);
 		} catch {
-			throw redirect(302, '/login');
+			return { homeApp: null, unavailable: true };
 		}
 		const session = getUserSession(firstEmail);
-		if (!session?.root_folder_id) throw redirect(302, '/login');
+		if (!session?.root_folder_id) {
+			return { homeApp: null, unavailable: true };
+		}
 		rootFolderId = session.root_folder_id;
 	}
 
@@ -36,10 +38,12 @@ export const load: PageServerLoad = async ({ locals, url, cookies }) => {
 	try {
 		homeApp = await getHomeApp(auth, rootFolderId!);
 	} catch {
-		throw redirect(302, '/login');
+		return { homeApp: null, unavailable: true };
 	}
 
-	if (!homeApp) throw redirect(302, '/login');
+	if (!homeApp) {
+		return { homeApp: null, unavailable: true };
+	}
 
 	// ── Serve the home app with auth logic ──
 
