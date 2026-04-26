@@ -3,8 +3,38 @@ import { getDrive, getDocs } from './google.js';
 import type { AppConfig, AssetInfo, ScriptFile } from '../types.js';
 import { getConfigSheet, updateAppInConfig, addAppToConfig } from './sheets.js';
 import { cacheHtml } from './siteCache.js';
+import { pathToSlug, normalizePath } from './siteTree.js';
 import { v4 as uuidv4 } from 'uuid';
 import { env } from '$env/dynamic/private';
+
+// ─── generated_code_doc_id map helpers ───────────────────────────────────────
+// The AppConfig field stores a JSON object mapping path → Drive file id, e.g.
+//   {"/":"<id>","/blog/post-1":"<id>"}
+// For backwards compatibility, a bare string (legacy single-page apps) is
+// treated as the id for the root path "/".
+
+export type DocIdMap = Record<string, string>;
+
+export function parseDocIdMap(raw: string): DocIdMap {
+	const trimmed = (raw ?? '').trim();
+	if (!trimmed) return {};
+	if (trimmed.startsWith('{')) {
+		try {
+			const obj = JSON.parse(trimmed) as DocIdMap;
+			if (obj && typeof obj === 'object') return obj;
+		} catch { /* fall through to legacy */ }
+	}
+	return { '/': trimmed };
+}
+
+export function serializeDocIdMap(map: DocIdMap): string {
+	return JSON.stringify(map);
+}
+
+export function getDocIdForPath(raw: string, path: string): string | null {
+	const map = parseDocIdMap(raw);
+	return map[normalizePath(path)] ?? null;
+}
 
 const DRIVE_PARAMS = {
 	supportsAllDrives: true,
@@ -231,12 +261,18 @@ export async function writeGeneratedCode(
 	appName: string,
 	code: string,
 	folderId: string,
-	existingDocId?: string
+	existingMapRaw?: string,
+	subPath: string = '/'
 ): Promise<string> {
 	const drive = getDrive(auth);
+	const path = normalizePath(subPath);
+	const slug = pathToSlug(path);
+	const map = parseDocIdMap(existingMapRaw ?? '');
+	const existingDocId = map[path];
+
+	let docId: string | null = null;
 
 	if (existingDocId) {
-		// Check if existing file is a Google Doc (legacy) or plain file
 		let isGoogleDoc = false;
 		try {
 			const meta = await drive.files.get({ fileId: existingDocId, fields: 'mimeType', ...DRIVE_PARAMS });
@@ -246,48 +282,43 @@ export async function writeGeneratedCode(
 		}
 
 		if (isGoogleDoc) {
-			// Google Docs corrupt HTML on update — delete and replace with plain file
 			try { await drive.files.delete({ fileId: existingDocId, ...DRIVE_PARAMS }); } catch { /* ignore */ }
 		} else {
-			// Plain file — update in-place
 			try {
 				await drive.files.update({
 					fileId: existingDocId,
 					media: { mimeType: 'text/plain', body: code },
 					...DRIVE_PARAMS
 				});
-				await updateAppInConfig(auth, rootFolderId, appId, {
-					last_built_at: new Date().toISOString(),
-					updated_at: new Date().toISOString()
-				});
-				cacheHtml(appId, code);
-				return existingDocId;
+				docId = existingDocId;
 			} catch {
-				// File missing or inaccessible — delete orphan before creating new
 				try { await drive.files.delete({ fileId: existingDocId, ...DRIVE_PARAMS }); } catch { /* ignore */ }
 			}
 		}
 	}
 
-	const created = await drive.files.create({
-		requestBody: {
-			name: `${appName} — Generated.html`,
-			mimeType: 'text/plain',
-			parents: [folderId]
-		},
-		media: { mimeType: 'text/plain', body: code },
-		fields: 'id',
-		...DRIVE_PARAMS
-	});
-	const docId = created.data.id!;
+	if (!docId) {
+		const created = await drive.files.create({
+			requestBody: {
+				name: `${appName} — Generated — ${slug}.html`,
+				mimeType: 'text/plain',
+				parents: [folderId]
+			},
+			media: { mimeType: 'text/plain', body: code },
+			fields: 'id',
+			...DRIVE_PARAMS
+		});
+		docId = created.data.id!;
+	}
 
+	map[path] = docId;
 	await updateAppInConfig(auth, rootFolderId, appId, {
-		generated_code_doc_id: docId,
+		generated_code_doc_id: serializeDocIdMap(map),
 		last_built_at: new Date().toISOString(),
 		updated_at: new Date().toISOString()
 	});
 
-	cacheHtml(appId, code);
+	cacheHtml(appId, code, path);
 	return docId;
 }
 

@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { env } from '$env/dynamic/private';
 import type { TableSchema, AssetInfo, ScriptFile } from '../types.js';
+import type { RouteEntry } from './siteTree.js';
 
 let _client: Anthropic | null = null;
 
@@ -139,6 +140,41 @@ Rules for custom scripts:
 - The custom scripts are loaded before your <script type="module"> block, so their globals are available.\n`;
 }
 
+export interface PageContext {
+	/** Style guide from the root requirements doc — always passed. */
+	rootStyleGuide?: string;
+	/** Markdown body for this page (from content.md). Empty string if none. */
+	pageContent?: string;
+	/** Full route manifest of the site so navigation can be rendered. */
+	routes?: RouteEntry[];
+	/** Path of the page being generated, e.g. "/", "/blog/post-1". */
+	currentPath?: string;
+}
+
+function styleGuideBlock(rootStyleGuide?: string, currentPath?: string): string {
+	if (!rootStyleGuide || currentPath === '/') return '';
+	return `\nROOT STYLE GUIDE (inherited from the site root — apply unless this page's requirements override):\n${rootStyleGuide}\n`;
+}
+
+function pageContentBlock(pageContent?: string): string {
+	if (!pageContent) return '';
+	return `\nPAGE CONTENT (markdown — render this as the main body of the page, preserving structure and meaning):\n\`\`\`markdown\n${pageContent}\n\`\`\`\n`;
+}
+
+function routesBlock(routes?: RouteEntry[], currentPath?: string): string {
+	if (!routes || routes.length === 0) return '';
+	const lines = routes
+		.map((r) => `  - ${r.path}${r.path === currentPath ? '  (current page)' : ''} — ${r.title}`)
+		.join('\n');
+	return `\nSITE NAVIGATION:
+This page is part of a multi-page site. The full route map is below. Render navigation/links to the
+other pages where it makes sense (e.g. a header nav for siblings, a list of children on a landing
+page). Use plain anchor tags with absolute paths from the route map — the host page handles routing.
+
+Routes:
+${lines}\n`;
+}
+
 function buildSystemPrompt(
 	requirements: string,
 	tables: TableSchema[],
@@ -146,13 +182,14 @@ function buildSystemPrompt(
 	appId: string,
 	uxSummaries: string[],
 	assets: AssetInfo[] = [],
-	scripts: ScriptFile[] = []
+	scripts: ScriptFile[] = [],
+	page: PageContext = {}
 ): string {
 	return `You are an expert full-stack web developer. Your job is to generate a complete, single-file HTML web application.
 
 REQUIREMENTS:
 ${requirements}
-
+${styleGuideBlock(page.rootStyleGuide, page.currentPath)}${pageContentBlock(page.pageContent)}${routesBlock(page.routes, page.currentPath)}
 DATABASE SCHEMA:
 ${schemaToDescription(tables)}
 
@@ -197,6 +234,40 @@ Never hardcode API keys. If the credential is missing, show a user-friendly mess
 API keys unless the app owner explicitly asks for an end-user key input.`;
 }
 
+// ─── Build cost estimation ────────────────────────────────────────────────────
+// Counts input tokens for the system+user prompt (server-side via Anthropic's
+// count_tokens endpoint) and applies a fixed output budget per page so the UI
+// can show a USD figure before kicking off a build.
+
+const ESTIMATED_OUTPUT_TOKENS_PER_PAGE = 8000;
+
+export async function estimateBuildCost(
+	requirements: string,
+	tables: TableSchema[],
+	apiBase: string,
+	appId: string,
+	uxSummaries: string[],
+	assets: AssetInfo[] = [],
+	scripts: ScriptFile[] = [],
+	page: PageContext = {}
+): Promise<{ inputTokens: number; outputTokens: number; cost: number }> {
+	const client = getClient();
+	const system = buildSystemPrompt(requirements, tables, apiBase, appId, uxSummaries, assets, scripts, page);
+
+	const res = await withRetry(() => client.messages.countTokens({
+		model: INITIAL_MODEL,
+		system,
+		messages: [
+			{ role: 'user', content: 'Generate the complete HTML application now. Output only the HTML.' }
+		]
+	}));
+
+	const inputTokens = res.input_tokens;
+	const outputTokens = ESTIMATED_OUTPUT_TOKENS_PER_PAGE;
+	const cost = calcCost(INITIAL_MODEL, inputTokens, outputTokens);
+	return { inputTokens, outputTokens, cost };
+}
+
 // ─── Initial build (Opus 4.6) ─────────────────────────────────────────────────
 
 export async function* generateApp(
@@ -208,10 +279,11 @@ export async function* generateApp(
 	onCost?: (cost: number) => void,
 	assets: AssetInfo[] = [],
 	scripts: ScriptFile[] = [],
-	onProgress?: ProgressCallback
+	onProgress?: ProgressCallback,
+	page: PageContext = {}
 ): AsyncGenerator<string> {
 	const client = getClient();
-	const system = buildSystemPrompt(requirements, tables, apiBase, appId, uxSummaries, assets, scripts);
+	const system = buildSystemPrompt(requirements, tables, apiBase, appId, uxSummaries, assets, scripts, page);
 
 	if (onProgress) onProgress('Waiting for Claude…');
 	const stream = await withStreamRetry(() => client.messages.stream({
@@ -267,10 +339,11 @@ export async function* continueApp(
 	onCost?: (cost: number) => void,
 	assets: AssetInfo[] = [],
 	scripts: ScriptFile[] = [],
-	onProgress?: ProgressCallback
+	onProgress?: ProgressCallback,
+	page: PageContext = {}
 ): AsyncGenerator<string> {
 	const client = getClient();
-	const system = buildSystemPrompt(requirements, tables, apiBase, appId, uxSummaries, assets, scripts);
+	const system = buildSystemPrompt(requirements, tables, apiBase, appId, uxSummaries, assets, scripts, page);
 	const clean = stripTruncationMarker(partialCode);
 
 	if (onProgress) onProgress('Waiting for Claude…');
@@ -337,10 +410,11 @@ export async function* generateEditDiff(
 	onCost?: (cost: number) => void,
 	assets: AssetInfo[] = [],
 	scripts: ScriptFile[] = [],
-	onProgress?: ProgressCallback
+	onProgress?: ProgressCallback,
+	page: PageContext = {}
 ): AsyncGenerator<string> {
 	const client = getClient();
-	const system = buildSystemPrompt(requirements, tables, apiBase, appId, uxSummaries, assets, scripts) + DIFF_SYSTEM_SUFFIX;
+	const system = buildSystemPrompt(requirements, tables, apiBase, appId, uxSummaries, assets, scripts, page) + DIFF_SYSTEM_SUFFIX;
 
 	if (onProgress) onProgress('Waiting for Claude…');
 	const stream = await withStreamRetry(() => client.messages.stream({
@@ -381,10 +455,11 @@ export async function* editApp(
 	onCost?: (cost: number) => void,
 	assets: AssetInfo[] = [],
 	scripts: ScriptFile[] = [],
-	onProgress?: ProgressCallback
+	onProgress?: ProgressCallback,
+	page: PageContext = {}
 ): AsyncGenerator<string> {
 	const client = getClient();
-	const system = buildSystemPrompt(requirements, tables, apiBase, appId, uxSummaries, assets, scripts);
+	const system = buildSystemPrompt(requirements, tables, apiBase, appId, uxSummaries, assets, scripts, page);
 
 	if (onProgress) onProgress('Waiting for Claude…');
 	const stream = await withStreamRetry(() => client.messages.stream({

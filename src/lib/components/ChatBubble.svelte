@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { tick } from 'svelte';
 
-	let { appId, onUpdated }: { appId: string; onUpdated?: () => void } = $props();
+	let { appId, subPath = '/', onUpdated }: { appId: string; subPath?: string; onUpdated?: () => void } = $props();
 
 	type UserMsg = { type: 'user'; text: string };
 	type AssistantMsg = { type: 'assistant'; text: string; streaming?: boolean };
@@ -101,7 +101,7 @@
 		const res = await fetch(`/api/apps/${appId}/chat`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ message: req, userApiKey: storedKey || undefined })
+				body: JSON.stringify({ message: req, userApiKey: storedKey || undefined, subPath })
 			});
 
 			if (res.status === 402) {

@@ -3,9 +3,10 @@ import type { SessionUser } from '$lib/server/auth.js';
 import { getAuthedClient } from '$lib/server/auth.js';
 import { lookupApp, getUserClient } from '$lib/server/rootAuth.js';
 import { getAppById } from '$lib/server/sheets.js';
-import { readGeneratedCode } from '$lib/server/drive.js';
+import { readGeneratedCode, getDocIdForPath } from '$lib/server/drive.js';
 import { verifyAppToken, appCookieName } from '$lib/server/appAuth.js';
 import { getCachedApp, getCachedHtml, cacheHtml } from '$lib/server/siteCache.js';
+import { normalizePath } from '$lib/server/siteTree.js';
 import { error } from '@sveltejs/kit';
 import { minify } from 'html-minifier-terser';
 
@@ -31,8 +32,8 @@ async function minifyHtml(code: string): Promise<string> {
 	}
 }
 
-function serveCachedHtml(appId: string): Response {
-	const html = getCachedHtml(appId);
+function serveCachedHtml(appId: string, subPath: string): Response {
+	const html = getCachedHtml(appId, subPath);
 	if (html) return new Response(html, { headers: HTML_HEADERS });
 	throw error(503, 'Site temporarily unavailable — please try again later.');
 }
@@ -40,10 +41,10 @@ function serveCachedHtml(appId: string): Response {
 export const GET: RequestHandler = async ({ params, locals, url, cookies }) => {
 	const user = locals.user as SessionUser | null;
 	const appId = params.appId!;
+	const subPath = normalizePath(params.subPath ?? '');
 
-	// Resolve via registry
 	const reg = lookupApp(appId);
-	if (!reg) return serveCachedHtml(appId);
+	if (!reg) return serveCachedHtml(appId, subPath);
 
 	let isOwner: boolean;
 	let auth;
@@ -55,23 +56,21 @@ export const GET: RequestHandler = async ({ params, locals, url, cookies }) => {
 			: getUserClient(reg.ownerEmail, url.origin);
 		rootFolderId = reg.rootFolderId;
 	} catch {
-		return serveCachedHtml(appId);
+		return serveCachedHtml(appId, subPath);
 	}
 
 	let app;
 	try {
 		app = await getAppById(auth, rootFolderId, appId);
 	} catch {
-		return serveCachedHtml(appId);
+		return serveCachedHtml(appId, subPath);
 	}
 	if (!app) {
-		// App deleted from config but might still be cached
 		const cached = getCachedApp(appId);
 		if (!cached) throw error(404, 'App not found');
-		return serveCachedHtml(appId);
+		return serveCachedHtml(appId, subPath);
 	}
 
-	// For non-owner visitors, verify they have a valid app token
 	if (!isOwner && (app as unknown as Record<string, unknown>).app_password) {
 		const cookieToken = cookies.get(appCookieName(app.id));
 		if (!cookieToken) throw error(401, 'Not authenticated');
@@ -79,31 +78,29 @@ export const GET: RequestHandler = async ({ params, locals, url, cookies }) => {
 		if (!valid) throw error(401, 'Invalid token');
 	}
 
-	if (!app.generated_code_doc_id) {
+	const docId = getDocIdForPath(app.generated_code_doc_id, subPath);
+	if (!docId) {
 		return new Response(
-			`<!doctype html><html><body style="font-family:sans-serif;padding:2rem;color:#6b7280"><h2>Not built yet</h2><p>Go back and click "Build App".</p></body></html>`,
+			`<!doctype html><html><body style="font-family:sans-serif;padding:2rem;color:#6b7280"><h2>Page not built yet</h2><p>This route hasn't been built. Open the app's dashboard to build it.</p></body></html>`,
 			{ headers: { 'Content-Type': 'text/html', 'Cache-Control': 'no-cache' } }
 		);
 	}
 
 	let code: string;
 	try {
-		code = await readGeneratedCode(auth, app.generated_code_doc_id);
+		code = await readGeneratedCode(auth, docId);
 	} catch {
-		return serveCachedHtml(appId);
+		return serveCachedHtml(appId, subPath);
 	}
 
 	if (!code.trim()) {
 		return new Response(
-			`<!doctype html><html><body style="font-family:sans-serif;padding:2rem;color:#6b7280"><h2>App is empty</h2><p>The generated code file is empty. Try rebuilding the app.</p></body></html>`,
+			`<!doctype html><html><body style="font-family:sans-serif;padding:2rem;color:#6b7280"><h2>Page is empty</h2><p>The generated code file is empty. Try rebuilding this page.</p></body></html>`,
 			{ headers: { 'Content-Type': 'text/html', 'Cache-Control': 'no-cache' } }
 		);
 	}
 
 	const html = await minifyHtml(code);
-
-	// Cache the HTML for offline serving
-	cacheHtml(appId, html);
-
+	cacheHtml(appId, html, subPath);
 	return new Response(html, { headers: HTML_HEADERS });
 };

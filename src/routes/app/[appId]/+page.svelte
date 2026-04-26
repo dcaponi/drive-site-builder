@@ -16,6 +16,82 @@
 	let buildError = $state('');
 	let feedbacks = $state<ConversationFeedback[]>([...data.feedbacks]);
 
+	// Build modal state
+	type EstimateInvalidEntry = { path: string; folderName: string; folderId: string; reason: string };
+	type EstimatePerPage = { path: string; folderName: string; cost: number; inputTokens: number; outputTokens: number };
+	type Estimate = {
+		targetPath: string;
+		recursive: boolean;
+		pageCount: number;
+		totalCost: number;
+		perPage: EstimatePerPage[];
+		invalidPaths: EstimateInvalidEntry[];
+	};
+	let estimating = $state(false);
+	let estimate = $state<Estimate | null>(null);
+	let estimateError = $state('');
+	let pendingTarget = $state<{ path: string; folderName: string; recursive: boolean } | null>(null);
+
+	async function openBuildModal(path: string, folderName: string, recursive: boolean) {
+		pendingTarget = { path, folderName, recursive };
+		estimate = null;
+		estimateError = '';
+		estimating = true;
+		try {
+			const subPath = path === '/' ? '' : path.replace(/^\//, '');
+			const url = `/api/apps/${data.app.id}/estimate/${subPath}?recursive=${recursive ? '1' : '0'}`;
+			const res = await fetch(url);
+			const body = await res.json().catch(() => ({}));
+			if (!res.ok) {
+				estimateError = body.error ?? `Server error ${res.status}`;
+				if (body.invalidPaths) {
+					estimate = {
+						targetPath: path,
+						recursive,
+						pageCount: 0,
+						totalCost: 0,
+						perPage: [],
+						invalidPaths: body.invalidPaths
+					};
+				}
+				return;
+			}
+			estimate = body as Estimate;
+		} catch (err) {
+			estimateError = err instanceof Error ? err.message : 'Failed to estimate';
+		} finally {
+			estimating = false;
+		}
+	}
+
+	function closeBuildModal() {
+		pendingTarget = null;
+		estimate = null;
+		estimateError = '';
+	}
+
+	async function confirmBuild() {
+		if (!pendingTarget) return;
+		const { path, recursive } = pendingTarget;
+		closeBuildModal();
+		building = true;
+		buildProgress = '';
+		buildError = '';
+
+		try {
+			const subPath = path === '/' ? '' : path.replace(/^\//, '');
+			const res = await fetch(`/api/apps/${data.app.id}/build/${subPath}?recursive=${recursive ? '1' : '0'}`, {
+				method: 'POST'
+			});
+			if (!res.ok) throw new Error(await res.text());
+			const { jobId } = await res.json();
+			startBuildPolling(jobId);
+		} catch (err) {
+			buildError = err instanceof Error ? err.message : 'Build failed';
+			building = false;
+		}
+	}
+
 	// Access settings state
 	let membersOnly = $state(data.app.members_only ?? false);
 	let accessDomains = $state((data.app.allowed_domains ?? []).join('\n'));
@@ -109,22 +185,6 @@
 			members = members.filter((m) => m.id !== userId);
 		} catch (err) {
 			memberError = err instanceof Error ? err.message : 'Failed to remove member';
-		}
-	}
-
-	async function triggerBuild() {
-		building = true;
-		buildProgress = '';
-		buildError = '';
-
-		try {
-			const res = await fetch(`/api/apps/${data.app.id}/build`, { method: 'POST' });
-			if (!res.ok) throw new Error(await res.text());
-			const { jobId } = await res.json();
-			startBuildPolling(jobId);
-		} catch (err) {
-			buildError = err instanceof Error ? err.message : 'Build failed';
-			building = false;
 		}
 	}
 
@@ -222,8 +282,11 @@
 				<a href="/serve/{data.app.id}" target="_blank" class="btn-outline">Open App ↗</a>
 			{/if}
 		{/if}
-		<button class="btn-primary" onclick={triggerBuild} disabled={building}>
-			{building ? 'Building…' : data.hasCode ? 'Rebuild' : 'Build App'}
+		<button class="btn-outline" onclick={() => openBuildModal('/', data.app.name, false)} disabled={building}>
+			{building ? 'Building…' : data.hasCode ? 'Rebuild root' : 'Build root'}
+		</button>
+		<button class="btn-primary" onclick={() => openBuildModal('/', data.app.name, true)} disabled={building}>
+			{building ? 'Building…' : 'Build site (all pages)'}
 		</button>
 		<form method="POST" action="?/deleteApp" use:enhance onsubmit={(e) => { if (!confirm('Delete this app? The Google Drive folder will be kept.')) e.preventDefault(); }}>
 			<button type="submit" class="btn-danger">Delete App</button>
@@ -303,6 +366,60 @@
 		{/if}
 	</section>
 </div>
+
+<!-- Pages tree -->
+{#if data.tree}
+	<section class="card pages-section">
+		<h2>Pages</h2>
+		<p class="muted" style="margin-bottom:0.75rem;">
+			Each sub-folder in Drive becomes a route. Pages inherit requirements from the nearest parent;
+			the root requirements doc always provides the style guide. Use a <code>content.md</code> file
+			to set a page's main body.
+		</p>
+		{@render renderPageNode(data.tree, 0)}
+	</section>
+{/if}
+
+{#snippet renderPageNode(node: NonNullable<typeof data.tree>, depth: number)}
+	<div class="page-node" style="padding-left:{depth * 1.25}rem">
+		<div class="page-row">
+			<div class="page-info">
+				<div class="page-path">
+					<code>{node.path}</code>
+					{#if !node.nameValid}
+						<span class="invalid-badge" title={node.nameError ?? ''}>invalid name</span>
+					{:else if node.hasBuild}
+						<span class="ok-badge">built</span>
+					{:else}
+						<span class="pending-badge">not built</span>
+					{/if}
+					{#if node.hasContent}<span class="hint-badge">content.md</span>{/if}
+					{#if node.hasOwnRequirements}<span class="hint-badge">requirements</span>{/if}
+				</div>
+				{#if !node.nameValid}
+					<p class="invalid-msg">"{node.folderName}" — {node.nameError}. Rename in Drive to enable this route.</p>
+				{/if}
+			</div>
+			<div class="page-actions">
+				<button
+					class="btn-outline small"
+					disabled={!node.nameValid || building}
+					onclick={() => openBuildModal(node.path, node.folderName || data.app.name, false)}
+				>Build</button>
+				{#if node.children.length > 0}
+					<button
+						class="btn-primary small"
+						disabled={!node.nameValid || building}
+						onclick={() => openBuildModal(node.path, node.folderName || data.app.name, true)}
+					>Build + children</button>
+				{/if}
+			</div>
+		</div>
+		{#each node.children as child (child.folderId)}
+			{@render renderPageNode(child, depth + 1)}
+		{/each}
+	</div>
+{/snippet}
 
 <!-- Assets & Scripts -->
 {#if data.assets.length > 0 || data.scripts.length > 0}
@@ -513,6 +630,74 @@
 			{/each}
 		</ul>
 	</section>
+{/if}
+
+<!-- Build confirmation modal -->
+{#if pendingTarget}
+	<div class="modal-backdrop" onclick={closeBuildModal} role="presentation">
+		<div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+			<h3>
+				{#if pendingTarget.recursive}
+					Build {pendingTarget.folderName}{pendingTarget.path === '/' ? '' : ''} and all child pages?
+				{:else}
+					Build {pendingTarget.folderName} ({pendingTarget.path})?
+				{/if}
+			</h3>
+
+			{#if estimating}
+				<p class="modal-loading"><span class="spinner"></span> Calculating estimate…</p>
+			{:else if estimateError && !estimate?.invalidPaths?.length}
+				<p class="modal-error">{estimateError}</p>
+				<div class="modal-actions">
+					<button class="btn-outline" onclick={closeBuildModal}>Close</button>
+				</div>
+			{:else if estimate}
+				{#if estimate.invalidPaths.length > 0}
+					<div class="invalid-block">
+						<p class="invalid-heading">⚠ {estimate.invalidPaths.length} folder{estimate.invalidPaths.length === 1 ? '' : 's'} ha{estimate.invalidPaths.length === 1 ? 's' : 've'} invalid route names and will be skipped:</p>
+						<ul>
+							{#each estimate.invalidPaths as inv}
+								<li>
+									<code>{inv.folderName || inv.path}</code> — {inv.reason}
+									<a href={`https://drive.google.com/drive/folders/${inv.folderId}`} target="_blank">Open in Drive ↗</a>
+								</li>
+							{/each}
+						</ul>
+					</div>
+				{/if}
+
+				{#if estimate.pageCount > 0}
+					<p class="modal-summary">
+						Estimated cost: <strong>${estimate.totalCost.toFixed(4)}</strong>
+						across <strong>{estimate.pageCount}</strong> page{estimate.pageCount === 1 ? '' : 's'}.
+					</p>
+
+					{#if estimate.perPage.length > 1}
+						<details class="estimate-details">
+							<summary>Per-page breakdown</summary>
+							<ul class="per-page-list">
+								{#each estimate.perPage as p}
+									<li><code>{p.path}</code> — ${p.cost.toFixed(4)} ({p.inputTokens.toLocaleString()} in / ~{p.outputTokens.toLocaleString()} out)</li>
+								{/each}
+							</ul>
+						</details>
+					{/if}
+
+					<div class="modal-actions">
+						<button class="btn-outline" onclick={closeBuildModal}>Cancel</button>
+						<button class="btn-primary" onclick={confirmBuild}>
+							{estimate.invalidPaths.length > 0 ? 'Build valid pages only' : 'Build'}
+						</button>
+					</div>
+				{:else}
+					<p class="modal-error">No valid pages to build.</p>
+					<div class="modal-actions">
+						<button class="btn-outline" onclick={closeBuildModal}>Close</button>
+					</div>
+				{/if}
+			{/if}
+		</div>
+	</div>
 {/if}
 
 <style>
@@ -1029,4 +1214,53 @@
 		word-break: break-all;
 		margin-top: 0.35rem;
 	}
+
+	/* Pages tree */
+	.pages-section { margin-bottom: 1.5rem; }
+	.page-node { padding-top: 0.4rem; padding-bottom: 0.4rem; border-left: 1px solid #f3f4f6; }
+	.page-node:first-child { border-left: none; }
+	.page-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.4rem 0.5rem; border-radius: 6px; }
+	.page-row:hover { background: #fafbfc; }
+	.page-info { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; flex: 1; }
+	.page-path code { font-size: 0.85rem; color: #1f2937; }
+	.page-path { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+	.invalid-badge { background: #fef2f2; color: #b91c1c; font-size: 0.7rem; font-weight: 500; padding: 0.1rem 0.45rem; border-radius: 999px; }
+	.ok-badge { background: #f0fdf4; color: #15803d; font-size: 0.7rem; font-weight: 500; padding: 0.1rem 0.45rem; border-radius: 999px; }
+	.pending-badge { background: #fef3c7; color: #92400e; font-size: 0.7rem; font-weight: 500; padding: 0.1rem 0.45rem; border-radius: 999px; }
+	.hint-badge { background: #eef2ff; color: #4f46e5; font-size: 0.7rem; padding: 0.1rem 0.45rem; border-radius: 999px; }
+	.invalid-msg { font-size: 0.78rem; color: #b91c1c; margin: 0; }
+	.page-actions { display: flex; gap: 0.4rem; flex-shrink: 0; }
+
+	/* Build modal */
+	.modal-backdrop {
+		position: fixed; inset: 0;
+		background: rgba(15, 23, 42, 0.45);
+		display: flex; align-items: center; justify-content: center;
+		padding: 1.5rem;
+		z-index: 2000;
+	}
+	.modal {
+		background: #fff;
+		border-radius: 12px;
+		padding: 1.5rem;
+		max-width: 540px;
+		width: 100%;
+		max-height: calc(100vh - 3rem);
+		overflow-y: auto;
+		box-shadow: 0 24px 60px rgba(0, 0, 0, 0.18);
+	}
+	.modal h3 { font-size: 1.05rem; font-weight: 600; margin-bottom: 1rem; color: #111827; }
+	.modal-loading { display: flex; align-items: center; gap: 0.5rem; color: #4f46e5; font-size: 0.9rem; }
+	.modal-error { color: #b91c1c; font-size: 0.875rem; margin-bottom: 1rem; }
+	.modal-summary { font-size: 0.95rem; color: #374151; margin-bottom: 0.75rem; }
+	.modal-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1rem; }
+	.invalid-block { background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; padding: 0.75rem; margin-bottom: 1rem; }
+	.invalid-heading { font-size: 0.85rem; color: #92400e; font-weight: 500; margin-bottom: 0.4rem; }
+	.invalid-block ul { padding-left: 1.2rem; margin: 0; font-size: 0.8rem; color: #78350f; }
+	.invalid-block ul li { margin-bottom: 0.25rem; }
+	.invalid-block a { color: #b45309; margin-left: 0.4rem; }
+	.estimate-details { font-size: 0.825rem; color: #4b5563; margin-bottom: 0.5rem; }
+	.estimate-details summary { cursor: pointer; color: #4f46e5; font-weight: 500; }
+	.per-page-list { padding-left: 1.2rem; margin: 0.4rem 0 0; }
+	.per-page-list li { margin-bottom: 0.2rem; }
 </style>

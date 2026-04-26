@@ -19,6 +19,11 @@ function safeFilename(id: string): string {
 	return id.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
+function pathToCacheSlug(path: string | undefined): string {
+	if (!path || path === '/' || path === '') return 'index';
+	return path.replace(/^\/+|\/+$/g, '').replace(/[^a-zA-Z0-9_-]+/g, '_') || 'index';
+}
+
 // ─── App config cache ───────────────────────────────────────────────────────
 
 let _configs: Map<string, AppConfig> | null = null;
@@ -70,18 +75,27 @@ export function getCachedHomeApp(): AppConfig | null {
 }
 
 // ─── HTML cache ─────────────────────────────────────────────────────────────
+// One file per (appId, subPath). Legacy single-file cache at `<appId>.html`
+// is treated as the root path on read so existing caches keep working.
 
-export function cacheHtml(appId: string, html: string): void {
-	ensureDir(HTML_DIR);
+export function cacheHtml(appId: string, html: string, subPath: string = '/'): void {
+	const appDir = join(HTML_DIR, safeFilename(appId));
+	ensureDir(appDir);
 	try {
-		writeFileSync(join(HTML_DIR, `${safeFilename(appId)}.html`), html);
+		writeFileSync(join(appDir, `${pathToCacheSlug(subPath)}.html`), html);
 	} catch { /* non-fatal */ }
 }
 
-export function getCachedHtml(appId: string): string | null {
+export function getCachedHtml(appId: string, subPath: string = '/'): string | null {
+	const slug = pathToCacheSlug(subPath);
 	try {
-		return readFileSync(join(HTML_DIR, `${safeFilename(appId)}.html`), 'utf-8');
-	} catch {
-		return null;
+		return readFileSync(join(HTML_DIR, safeFilename(appId), `${slug}.html`), 'utf-8');
+	} catch { /* try legacy below */ }
+
+	if (slug === 'index') {
+		try {
+			return readFileSync(join(HTML_DIR, `${safeFilename(appId)}.html`), 'utf-8');
+		} catch { /* nothing cached */ }
 	}
+	return null;
 }

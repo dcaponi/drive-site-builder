@@ -11,6 +11,9 @@
 	}
 
 	const canChat = data.can_chat === true;
+	const contentSrc = $derived(
+		`/serve/${data.app.id}/content${data.subPath === '/' ? '' : data.subPath}`
+	);
 </script>
 
 <svelte:head>
@@ -26,19 +29,25 @@
 		</div>
 	</div>
 
-{:else if data.app.generated_code_doc_id}
+{:else if data.hasPage}
 	<iframe
 		bind:this={iframeEl}
-		src="/serve/{data.app.id}/content"
+		src={contentSrc}
 		title={data.app.name}
 	></iframe>
 	{#if canChat}
-		<ChatBubble appId={data.app.id} onUpdated={reloadApp} />
+		<ChatBubble appId={data.app.id} subPath={data.subPath} onUpdated={reloadApp} />
 	{/if}
 {:else}
 	<div class="not-built">
-		<h2>Not built yet</h2>
-		<p>Go to the <a href="/app/{data.app.id}">app page</a> and click "Build App".</p>
+		<h2>Page not built yet</h2>
+		<p>
+			{#if data.subPath === '/'}
+				Go to the <a href="/app/{data.app.id}">app page</a> and click "Build App".
+			{:else}
+				This route ({data.subPath}) hasn't been built yet — open the app's dashboard to build it.
+			{/if}
+		</p>
 	</div>
 {/if}
 
@@ -116,6 +125,8 @@
 		height: 100vh;
 		font-family: sans-serif;
 		color: #6b7280;
+		padding: 1.5rem;
+		text-align: center;
 	}
 
 	.not-built h2 {

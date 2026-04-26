@@ -15,8 +15,16 @@ import {
 	writeGeneratedCode,
 	appendToRequirementsDoc,
 	listFolderAssets,
-	listFolderScripts
+	listFolderScripts,
+	getDocIdForPath
 } from '$lib/server/drive.js';
+import {
+	scanSiteTree,
+	resolveTree,
+	findNodeByPath,
+	buildRouteManifest,
+	normalizePath
+} from '$lib/server/siteTree.js';
 import {
 	generateEditDiff,
 	editApp,
@@ -150,8 +158,10 @@ export const POST: RequestHandler = async ({ params, request, locals, url, cooki
 	}
 
 	// ── Update (background job) ───────────────────────────────────────────────
-	if (!app.generated_code_doc_id) {
-		return json({ error: 'App has not been built yet.' }, { status: 400 });
+	const subPath = normalizePath(typeof body.subPath === 'string' ? body.subPath : '/');
+	const targetDocId = getDocIdForPath(app.generated_code_doc_id, subPath);
+	if (!targetDocId) {
+		return json({ error: 'This page has not been built yet.' }, { status: 400 });
 	}
 
 	const jobId = createJob();
@@ -163,14 +173,25 @@ export const POST: RequestHandler = async ({ params, request, locals, url, cooki
 		try {
 			updateJob(jobId, { status: 'running', progress: 'Loading app…' });
 
-			const [requirements, schema, currentCode, uxSummaries, assets, scripts] = await Promise.all([
+			const [rootRequirements, schema, currentCode, uxSummaries, assets, scripts, rawTree] = await Promise.all([
 				readRequirementsDoc(auth, app.requirements_doc_id),
 				getAppSchema(auth, app.database_sheet_id),
-				readGeneratedCode(auth, app.generated_code_doc_id).catch(() => ''),
+				readGeneratedCode(auth, targetDocId).catch(() => ''),
 				getConversationSummaries(auth, rootFolderId, appId).catch(() => [] as string[]),
 				listFolderAssets(auth, app.folder_id),
-				listFolderScripts(auth, app.folder_id)
+				listFolderScripts(auth, app.folder_id),
+				scanSiteTree(auth, app.folder_id)
 			]);
+
+			const resolvedTree = await resolveTree(auth, rawTree);
+			const node = findNodeByPath(resolvedTree, subPath);
+			const requirements = node?.requirements ?? rootRequirements;
+			const pageCtx = {
+				rootStyleGuide: resolvedTree.requirements,
+				pageContent: node?.content ?? '',
+				routes: buildRouteManifest(resolvedTree),
+				currentPath: subPath
+			};
 
 			const now = new Date().toISOString();
 			appendConversation(auth, rootFolderId, {
@@ -188,7 +209,7 @@ export const POST: RequestHandler = async ({ params, request, locals, url, cooki
 			let diffOutput = '';
 			let diffLines = 0;
 			for await (const chunk of generateEditDiff(
-				currentCode, editRequest, requirements, schema, url.origin, appId, uxSummaries, trackCost, assets, scripts, onProgress
+				currentCode, editRequest, requirements, schema, url.origin, appId, uxSummaries, trackCost, assets, scripts, onProgress, pageCtx
 			)) {
 				diffOutput += chunk;
 				const newLines = countLines(diffOutput);
@@ -219,7 +240,7 @@ export const POST: RequestHandler = async ({ params, request, locals, url, cooki
 				} else {
 					let regenLines = 0;
 					for await (const chunk of editApp(
-						currentCode, editRequest, requirements, schema, url.origin, appId, uxSummaries, trackCost, assets, scripts, onProgress
+						currentCode, editRequest, requirements, schema, url.origin, appId, uxSummaries, trackCost, assets, scripts, onProgress, pageCtx
 					)) {
 						finalCode += chunk;
 						const newLines = countLines(finalCode);
@@ -242,7 +263,7 @@ export const POST: RequestHandler = async ({ params, request, locals, url, cooki
 				summaryPromise,
 				writeGeneratedCode(
 					auth, rootFolderId, appId, app.name, finalCode,
-					app.folder_id, app.generated_code_doc_id || undefined
+					app.folder_id, app.generated_code_doc_id || undefined, subPath
 				)
 			]);
 
