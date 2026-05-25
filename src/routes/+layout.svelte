@@ -7,6 +7,7 @@
 	const isServe = $derived(
 		page.url.pathname.startsWith('/serve/') ||
 		page.route.id === '/[clientSlug]/[appSlug]' ||
+		page.route.id === '/[clientSlug]/[appSlug]/[...subPath]' ||
 		page.route.id === '/'
 	);
 </script>
