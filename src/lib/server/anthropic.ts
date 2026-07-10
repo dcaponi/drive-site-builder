@@ -66,15 +66,22 @@ async function withStreamRetry(
 	}
 }
 
-const INITIAL_MODEL = 'claude-opus-4-6';
-const EDIT_MODEL = 'claude-sonnet-4-6';
+const INITIAL_MODEL = 'claude-fable-5';
+// Fable's safety classifiers can decline a request; the API retries it on this model server-side.
+const FALLBACK_MODEL = 'claude-opus-4-8';
+const FALLBACK_BETA_HEADER = 'server-side-fallback-2026-06-01';
+const EDIT_MODEL = 'claude-opus-4-8';
+const CHAT_MODEL = 'claude-sonnet-4-6';
 
-// Prices in USD per token (as of early 2026)
+// Prices in USD per token (as of mid 2026)
 const MODEL_PRICES: Record<string, { input: number; output: number }> = {
-	'claude-opus-4-6':          { input: 15 / 1_000_000,  output: 75 / 1_000_000 },
+	'claude-fable-5':           { input: 10 / 1_000_000,  output: 50 / 1_000_000 },
+	'claude-opus-4-8':          { input: 5  / 1_000_000,  output: 25 / 1_000_000 },
+	'claude-opus-4-7':          { input: 5  / 1_000_000,  output: 25 / 1_000_000 },
+	'claude-opus-4-6':          { input: 5  / 1_000_000,  output: 25 / 1_000_000 },
 	'claude-sonnet-4-6':        { input: 3  / 1_000_000,  output: 15 / 1_000_000 },
-	'claude-haiku-4-5-20251001': { input: 0.8 / 1_000_000, output: 4  / 1_000_000 },
-	'claude-haiku-4-5':          { input: 0.8 / 1_000_000, output: 4  / 1_000_000 }
+	'claude-haiku-4-5-20251001': { input: 1 / 1_000_000,  output: 5  / 1_000_000 },
+	'claude-haiku-4-5':          { input: 1 / 1_000_000,  output: 5  / 1_000_000 }
 };
 
 export function calcCost(model: string, inputTokens: number, outputTokens: number): number {
@@ -268,7 +275,11 @@ export async function estimateBuildCost(
 	return { inputTokens, outputTokens, cost };
 }
 
-// ─── Initial build (Opus 4.6) ─────────────────────────────────────────────────
+// ─── Initial build (Fable 5, server-side fallback to Opus 4.8) ───────────────
+// Fable 5 always thinks (no `thinking` param needed). Its safety classifiers can
+// decline a request with stop_reason "refusal"; the `fallbacks` beta retries the
+// same request on Opus 4.8 in the same call. Cost is computed from the model
+// that actually served the response (final.model).
 
 export async function* generateApp(
 	requirements: string,
@@ -289,8 +300,8 @@ export async function* generateApp(
 	const stream = await withStreamRetry(() => client.messages.stream({
 		model: INITIAL_MODEL,
 		max_tokens: 64000,
-		// @ts-expect-error - thinking is valid for Opus 4.6
-		thinking: { type: 'adaptive' },
+		// @ts-expect-error - fallbacks (server-side fallback beta) not yet in SDK types
+		fallbacks: [{ model: FALLBACK_MODEL }],
 		system,
 		messages: [
 			{
@@ -298,7 +309,7 @@ export async function* generateApp(
 				content: 'Generate the complete HTML application now. Output only the HTML.'
 			}
 		]
-	}), 3, onProgress);
+	}, { headers: { 'anthropic-beta': FALLBACK_BETA_HEADER } }), 3, onProgress);
 
 	for await (const event of stream) {
 		if (
@@ -310,13 +321,16 @@ export async function* generateApp(
 	}
 
 	const final = await stream.finalMessage();
-	if (onCost) onCost(calcCost(INITIAL_MODEL, final.usage.input_tokens, final.usage.output_tokens));
+	if (onCost) onCost(calcCost(final.model, final.usage.input_tokens, final.usage.output_tokens));
+	if ((final.stop_reason as string) === 'refusal') {
+		yield '\n<!-- [REFUSED: request was declined by safety filters (including the fallback model) — try rewording the requirements] -->';
+	}
 	if (final.stop_reason === 'max_tokens') {
 		yield '\n<!-- [TRUNCATED: output hit max_tokens limit — try rebuilding] -->';
 	}
 }
 
-// ─── Continue a truncated build (Opus 4.6) ────────────────────────────────────
+// ─── Continue a truncated build (Fable 5, fallback to Opus 4.8) ──────────────
 
 const TRUNCATION_MARKER = '<!-- [TRUNCATED:';
 
@@ -350,8 +364,8 @@ export async function* continueApp(
 	const stream = await withStreamRetry(() => client.messages.stream({
 		model: INITIAL_MODEL,
 		max_tokens: 64000,
-		// @ts-expect-error - thinking is valid for Opus 4.6
-		thinking: { type: 'adaptive' },
+		// @ts-expect-error - fallbacks (server-side fallback beta) not yet in SDK types
+		fallbacks: [{ model: FALLBACK_MODEL }],
 		system,
 		messages: [
 			{
@@ -359,7 +373,7 @@ export async function* continueApp(
 				content: `You previously started generating an HTML application but were cut off by the token limit. Here is the partial HTML output so far:\n\n${clean}\n\nContinue generating from exactly where you left off. Output ONLY the continuation — do not repeat anything already written. Output only valid HTML.`
 			}
 		]
-	}), 3, onProgress);
+	}, { headers: { 'anthropic-beta': FALLBACK_BETA_HEADER } }), 3, onProgress);
 
 	for await (const event of stream) {
 		if (
@@ -371,13 +385,16 @@ export async function* continueApp(
 	}
 
 	const final = await stream.finalMessage();
-	if (onCost) onCost(calcCost(INITIAL_MODEL, final.usage.input_tokens, final.usage.output_tokens));
+	if (onCost) onCost(calcCost(final.model, final.usage.input_tokens, final.usage.output_tokens));
+	if ((final.stop_reason as string) === 'refusal') {
+		yield '\n<!-- [REFUSED: request was declined by safety filters (including the fallback model) — try rewording the requirements] -->';
+	}
 	if (final.stop_reason === 'max_tokens') {
 		yield '\n<!-- [TRUNCATED: output hit max_tokens limit — try rebuilding] -->';
 	}
 }
 
-// ─── Diff-based edit (Sonnet 4.6) ────────────────────────────────────────────
+// ─── Diff-based edit (Opus 4.8) ──────────────────────────────────────────────
 // Asks Claude to emit only SEARCH/REPLACE blocks instead of the full file.
 // Much cheaper for small edits; the caller applies the diff and falls back to
 // a full regeneration if any block fails to match.
@@ -442,7 +459,7 @@ export async function* generateEditDiff(
 	if (onCost) onCost(calcCost(EDIT_MODEL, finalDiff.usage.input_tokens, finalDiff.usage.output_tokens));
 }
 
-// ─── Edit request (Sonnet 4.6) ────────────────────────────────────────────────
+// ─── Edit request (Opus 4.8) ──────────────────────────────────────────────────
 
 export async function* editApp(
 	currentCode: string,
@@ -526,7 +543,7 @@ export async function* chatConversation(
 	const client = getClient();
 
 	const stream = await withStreamRetry(() => client.messages.stream({
-		model: EDIT_MODEL,
+		model: CHAT_MODEL,
 		max_tokens: 1024,
 		system: `You are a helpful assistant for the "${appName}" web application. You help users understand what the app does and answer questions about it. Here are the app's requirements:\n\n${requirements}\n\nBe concise and friendly. Do not output code unless specifically asked.`,
 		messages: [
@@ -544,7 +561,7 @@ export async function* chatConversation(
 	}
 
 	const finalChat = await stream.finalMessage();
-	if (onCost) onCost(calcCost(EDIT_MODEL, finalChat.usage.input_tokens, finalChat.usage.output_tokens));
+	if (onCost) onCost(calcCost(CHAT_MODEL, finalChat.usage.input_tokens, finalChat.usage.output_tokens));
 }
 
 // ─── Tool-based chat with credential storage (Sonnet 4.6) ─────────────────────
@@ -585,14 +602,14 @@ export async function chatWithTools(
 
 	for (let round = 0; round < 4; round++) {
 		const response = await withRetry(() => client.messages.create({
-			model: EDIT_MODEL,
+			model: CHAT_MODEL,
 			max_tokens: 1024,
 			system: systemPrompt,
 			tools: CREDENTIAL_TOOLS,
 			messages
 		}));
 
-		if (onCost) onCost(calcCost(EDIT_MODEL, response.usage.input_tokens, response.usage.output_tokens));
+		if (onCost) onCost(calcCost(CHAT_MODEL, response.usage.input_tokens, response.usage.output_tokens));
 
 		// Collect text blocks
 		for (const block of response.content) {
