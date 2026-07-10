@@ -216,6 +216,18 @@ USER AUTH API (if app has user system):
   DELETE /api/apps/${appId}/users  (action: logout)  → 200
   GET    /api/apps/${appId}/users  (action: me)      → 200 { userId, email } or 401
 
+FILE UPLOAD API (for apps that accept file uploads from visitors):
+  POST   /api/apps/${appId}/uploads
+  Content-Type: application/json
+  body: { filename: string, data: string, uploader?: string, note?: string }
+  → 201 { ok: true }  or  4xx/5xx { error: string }
+- "data" is the file content base64-encoded WITHOUT the "data:...;base64," prefix.
+- Only .zip files are accepted, maximum 30 MB — validate the extension and size
+  client-side before encoding, and surface the server's "error" message on failure.
+- Files are delivered privately to the app owner's Google Drive. Never show the
+  visitor any storage details or URLs — just a clear success confirmation.
+- Use XMLHttpRequest for the POST when a real upload progress bar is wanted.
+
 USER DATA SCOPING:
 - CRUD records with a 'user_id' column are automatically scoped to the logged-in user.
 - If the user is not logged in (GET /me returns 401), store data in localStorage.

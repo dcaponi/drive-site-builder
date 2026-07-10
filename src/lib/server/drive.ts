@@ -6,6 +6,7 @@ import { cacheHtml } from './siteCache.js';
 import { pathToSlug, normalizePath } from './siteTree.js';
 import { v4 as uuidv4 } from 'uuid';
 import { env } from '$env/dynamic/private';
+import { Readable } from 'node:stream';
 
 // ─── generated_code_doc_id map helpers ───────────────────────────────────────
 // The AppConfig field stores a JSON object mapping path → Drive file id, e.g.
@@ -516,6 +517,59 @@ export async function downloadFileContent(
 		{ responseType: 'arraybuffer' }
 	);
 	return { data: Buffer.from(res.data as ArrayBuffer), mimeType };
+}
+
+// ─── Client file uploads ───────────────────────────────────────────────────────
+// Generated apps can accept file uploads from visitors via
+// POST /api/apps/{appId}/uploads. Files land in an "uploads" subfolder of the
+// app's Drive folder so they never mix with requirements/assets/generated code.
+
+const UPLOADS_FOLDER_NAME = 'uploads';
+
+export async function uploadClientFile(
+	auth: OAuth2Client,
+	appFolderId: string,
+	filename: string,
+	content: Buffer,
+	mimeType: string,
+	description?: string
+): Promise<{ fileId: string; name: string }> {
+	const drive = getDrive(auth);
+
+	const res = await drive.files.list({
+		q: `'${appFolderId}' in parents and mimeType = 'application/vnd.google-apps.folder' and name = '${UPLOADS_FOLDER_NAME}' and trashed = false`,
+		fields: 'files(id)',
+		...DRIVE_PARAMS
+	});
+	let folderId = res.data.files?.[0]?.id ?? null;
+
+	if (!folderId) {
+		const createdFolder = await drive.files.create({
+			requestBody: {
+				name: UPLOADS_FOLDER_NAME,
+				mimeType: 'application/vnd.google-apps.folder',
+				parents: [appFolderId]
+			},
+			fields: 'id',
+			...DRIVE_PARAMS
+		});
+		folderId = createdFolder.data.id!;
+	}
+
+	// Timestamp prefix keeps repeat uploads from colliding and sorts newest-last
+	const stamped = `${new Date().toISOString().slice(0, 16).replace('T', ' ')} — ${filename}`;
+
+	const created = await drive.files.create({
+		requestBody: {
+			name: stamped,
+			parents: [folderId],
+			description
+		},
+		media: { mimeType, body: Readable.from(content) },
+		fields: 'id,name',
+		...DRIVE_PARAMS
+	});
+	return { fileId: created.data.id!, name: created.data.name! };
 }
 
 // ─── Append changelog entry to requirements doc ───────────────────────────────
