@@ -526,6 +526,73 @@ export async function downloadFileContent(
 
 const UPLOADS_FOLDER_NAME = 'uploads';
 
+const TEST_MODE = typeof process !== 'undefined' && process.env.TEST_MODE === '1';
+
+// Streamed uploads use Drive's resumable protocol in fixed-size chunks so
+// server memory stays flat regardless of file size — piping a large stream
+// through googleapis' media upload was observed to exhaust container memory
+// and crash the process. Chunk size must be a multiple of 256 KiB.
+const RESUMABLE_CHUNK_BYTES = 8 * 1024 * 1024;
+
+async function resumableUpload(
+	auth: OAuth2Client,
+	folderId: string,
+	name: string,
+	mimeType: string,
+	content: Readable,
+	description?: string
+): Promise<{ fileId: string; name: string }> {
+	const initRes = await auth.request<void>({
+		url: 'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true&fields=id,name',
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/json; charset=UTF-8',
+			'X-Upload-Content-Type': mimeType
+		},
+		data: JSON.stringify({ name, parents: [folderId], description })
+	});
+
+	const headers = initRes.headers as unknown as { location?: string; get?: (k: string) => string | null };
+	const sessionUrl = headers.location ?? headers.get?.('location');
+	if (!sessionUrl) throw new Error('Drive did not return a resumable upload session URL');
+
+	let offset = 0;
+
+	async function putChunk(chunk: Buffer, isLast: boolean): Promise<{ id?: string; name?: string } | undefined> {
+		const range = chunk.length
+			? `bytes ${offset}-${offset + chunk.length - 1}/${isLast ? offset + chunk.length : '*'}`
+			: `bytes */${offset}`;
+		const res = await auth.request<{ id?: string; name?: string }>({
+			url: sessionUrl!,
+			method: 'PUT',
+			headers: { 'Content-Range': range },
+			data: chunk,
+			validateStatus: (s: number) => (isLast ? s === 200 || s === 201 : s === 308)
+		});
+		offset += chunk.length;
+		return res.data;
+	}
+
+	let pending: Buffer[] = [];
+	let pendingBytes = 0;
+
+	for await (const piece of content) {
+		pending.push(Buffer.isBuffer(piece) ? piece : Buffer.from(piece));
+		pendingBytes += pending[pending.length - 1].length;
+
+		while (pendingBytes >= RESUMABLE_CHUNK_BYTES) {
+			const buf = Buffer.concat(pending, pendingBytes);
+			await putChunk(buf.subarray(0, RESUMABLE_CHUNK_BYTES), false);
+			const rest = buf.subarray(RESUMABLE_CHUNK_BYTES);
+			pending = rest.length ? [rest] : [];
+			pendingBytes = rest.length;
+		}
+	}
+
+	const final = await putChunk(Buffer.concat(pending, pendingBytes), true);
+	return { fileId: final?.id ?? '', name: final?.name ?? name };
+}
+
 export async function uploadClientFile(
 	auth: OAuth2Client,
 	appFolderId: string,
@@ -559,13 +626,28 @@ export async function uploadClientFile(
 	// Timestamp prefix keeps repeat uploads from colliding and sorts newest-last
 	const stamped = `${new Date().toISOString().slice(0, 16).replace('T', ' ')} — ${filename}`;
 
+	// Streams go through the chunked resumable protocol (bounded memory).
+	// In TEST_MODE the mock has no resumable endpoint, so buffer instead —
+	// test payloads are small.
+	if (!Buffer.isBuffer(content) && !TEST_MODE) {
+		return resumableUpload(auth, folderId, stamped, mimeType, content, description);
+	}
+	let buffered: Buffer;
+	if (Buffer.isBuffer(content)) {
+		buffered = content;
+	} else {
+		const pieces: Buffer[] = [];
+		for await (const piece of content) pieces.push(Buffer.isBuffer(piece) ? piece : Buffer.from(piece));
+		buffered = Buffer.concat(pieces);
+	}
+
 	const created = await drive.files.create({
 		requestBody: {
 			name: stamped,
 			parents: [folderId],
 			description
 		},
-		media: { mimeType, body: Buffer.isBuffer(content) ? Readable.from(content) : content },
+		media: { mimeType, body: Readable.from(buffered) },
 		fields: 'id,name',
 		...DRIVE_PARAMS
 	});
