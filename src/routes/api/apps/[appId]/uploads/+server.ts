@@ -35,14 +35,19 @@ export const POST: RequestHandler = async ({ params, request, locals, url }) => 
 	const app = await getAppById(auth, reg.rootFolderId, appId);
 	if (!app) return json({ error: 'App not found' }, { status: 404 });
 
-	const body = (await request.json().catch(() => null)) as {
-		filename?: unknown;
-		data?: unknown;
-		uploader?: unknown;
-		note?: unknown;
-	} | null;
+	// A body over BODY_SIZE_LIMIT errors the request stream mid-read, so a
+	// failed parse here usually means "too large", not "malformed".
+	let body: { filename?: unknown; data?: unknown; uploader?: unknown; note?: unknown };
+	try {
+		body = await request.json();
+	} catch {
+		return json(
+			{ error: 'Upload was rejected before it completed — the file may exceed the server request limit. Try a smaller file.' },
+			{ status: 413 }
+		);
+	}
 
-	if (!body || typeof body.filename !== 'string' || typeof body.data !== 'string') {
+	if (typeof body.filename !== 'string' || typeof body.data !== 'string') {
 		return json({ error: 'filename and data (base64) are required' }, { status: 400 });
 	}
 
