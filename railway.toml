@@ -1,8 +1,8 @@
 [deploy]
-# BODY_SIZE_LIMIT lifts adapter-node's 512K request-body cap so the file
-# upload API can accept ~30 MB zips (sent as base64 JSON). A BODY_SIZE_LIMIT
-# env var set on the service still wins over the 45M default.
-startCommand = "BODY_SIZE_LIMIT=${BODY_SIZE_LIMIT:-45M} node build/index.js"
+# Railway execs this directly (no shell), so go through npm: the package.json
+# start script sets BODY_SIZE_LIMIT (default 45M, env var wins) to lift
+# adapter-node's 512K request-body cap for the ~30 MB zip upload API.
+startCommand = "npm run start"
 healthcheckPath = "/"
 healthcheckTimeout = 30
 restartPolicyType = "on_failure"
