@@ -1,7 +1,7 @@
 [deploy]
 # Railway execs this directly (no shell), so go through npm: the package.json
-# start script sets BODY_SIZE_LIMIT (default 45M, env var wins) to lift
-# adapter-node's 512K request-body cap for the ~30 MB zip upload API.
+# start script sets BODY_SIZE_LIMIT (default 5G, env var wins) to lift
+# adapter-node's 512K request-body cap for the zip upload API.
 startCommand = "npm run start"
 healthcheckPath = "/"
 healthcheckTimeout = 30

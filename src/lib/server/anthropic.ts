@@ -217,16 +217,18 @@ USER AUTH API (if app has user system):
   GET    /api/apps/${appId}/users  (action: me)      → 200 { userId, email } or 401
 
 FILE UPLOAD API (for apps that accept file uploads from visitors):
-  POST   /api/apps/${appId}/uploads
-  Content-Type: application/json
-  body: { filename: string, data: string, uploader?: string, note?: string }
+  POST   /api/apps/${appId}/uploads?filename=<name>&uploader=<name>&note=<text>
+  Content-Type: application/zip — the request body is the RAW file bytes.
   → 201 { ok: true }  or  4xx/5xx { error: string }
-- "data" is the file content base64-encoded WITHOUT the "data:...;base64," prefix.
-- Only .zip files are accepted, maximum 30 MB — validate the extension and size
-  client-side before encoding, and surface the server's "error" message on failure.
+- Pass the File object directly to xhr.send(file) (or as the fetch body). Do NOT
+  base64-encode it and do NOT read it with FileReader — the browser streams it.
+- URL-encode the filename, uploader and note query params (uploader/note optional).
+- Only .zip files are accepted, up to 5 GB — validate the extension client-side
+  and surface the server's "error" message on failure.
 - Files are delivered privately to the app owner's Google Drive. Never show the
   visitor any storage details or URLs — just a clear success confirmation.
-- Use XMLHttpRequest for the POST when a real upload progress bar is wanted.
+- Use XMLHttpRequest for the POST so xhr.upload's progress events can drive a
+  real progress bar.
 
 USER DATA SCOPING:
 - CRUD records with a 'user_id' column are automatically scoped to the logged-in user.

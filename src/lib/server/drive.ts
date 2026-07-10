@@ -530,7 +530,7 @@ export async function uploadClientFile(
 	auth: OAuth2Client,
 	appFolderId: string,
 	filename: string,
-	content: Buffer,
+	content: Buffer | Readable,
 	mimeType: string,
 	description?: string
 ): Promise<{ fileId: string; name: string }> {
@@ -565,7 +565,7 @@ export async function uploadClientFile(
 			parents: [folderId],
 			description
 		},
-		media: { mimeType, body: Readable.from(content) },
+		media: { mimeType, body: Buffer.isBuffer(content) ? Readable.from(content) : content },
 		fields: 'id,name',
 		...DRIVE_PARAMS
 	});
